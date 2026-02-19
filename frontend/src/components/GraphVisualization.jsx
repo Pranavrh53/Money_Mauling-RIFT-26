@@ -23,6 +23,10 @@ const COLORS = {
   textMuted: '#94A3B8',
   panelBg: '#1E293B',
   panelBorder: '#334155',
+  // Pattern-specific highlight colors
+  patternCycle: '#A855F7',      // Purple - Circular Fund Routing
+  patternSmurfing: '#06B6D4',   // Cyan - Smurfing (Fan-in/Fan-out)
+  patternShell: '#F97316',      // Orange - Shell Networks
 };
 
 function GraphVisualization({ data, fraudResults, riskIntelligence }) {
@@ -41,15 +45,16 @@ function GraphVisualization({ data, fraudResults, riskIntelligence }) {
   const [minAmount, setMinAmount] = useState(0);
   const [dimensions, setDimensions] = useState({ width: 900, height: 700 });
   const [flowOffset, setFlowOffset] = useState(0);
+  const [activePattern, setActivePattern] = useState(null); // null | 'cycle' | 'smurfing' | 'shell_chain'
 
   // ── Animate flow on highlighted links ─────────────────────────────────────
   useEffect(() => {
-    if (highlightLinks.size === 0) return;
+    if (highlightLinks.size === 0 && !activePattern) return;
     const interval = setInterval(() => {
       setFlowOffset(prev => (prev + 1) % 30);
     }, 50);
     return () => clearInterval(interval);
-  }, [highlightLinks.size]);
+  }, [highlightLinks.size, activePattern]);
 
   // ── Derive ring membership from fraud_rings ──────────────────────────────
   const ringMembershipMap = useMemo(() => {
@@ -82,6 +87,47 @@ function GraphVisualization({ data, fraudResults, riskIntelligence }) {
     });
     return map;
   }, [riskIntelligence]);
+
+  // ── Pattern-specific node sets for highlight buttons ────────────────────
+  const patternNodeSets = useMemo(() => {
+    const sets = { cycle: new Set(), smurfing: new Set(), shell_chain: new Set() };
+    fraudResults?.fraud_rings?.forEach(ring => {
+      const members = ring.member_accounts || [];
+      if (ring.pattern_type === 'cycle') {
+        members.forEach(id => sets.cycle.add(id));
+      } else if (ring.pattern_type === 'fan_in' || ring.pattern_type === 'fan_out') {
+        members.forEach(id => sets.smurfing.add(id));
+      } else if (ring.pattern_type === 'shell_chain') {
+        members.forEach(id => sets.shell_chain.add(id));
+      }
+    });
+    return sets;
+  }, [fraudResults]);
+
+  // ── Pattern-specific link sets ─────────────────────────────────────────
+  const patternLinkSets = useMemo(() => {
+    if (!activePattern || !data?.edges) return new Set();
+    const nodeSet = patternNodeSets[activePattern];
+    if (!nodeSet || nodeSet.size === 0) return new Set();
+    // A link belongs to the pattern if both source and target are pattern members
+    const linkKeys = new Set();
+    data.edges.forEach(e => {
+      const src = e.source?.id || e.source;
+      const tgt = e.target?.id || e.target;
+      if (nodeSet.has(src) && nodeSet.has(tgt)) {
+        linkKeys.add(`${src}->${tgt}`);
+      }
+    });
+    return linkKeys;
+  }, [activePattern, patternNodeSets, data]);
+
+  // Helper: get the highlight color for the active pattern
+  const getPatternColor = useCallback((pattern) => {
+    if (pattern === 'cycle') return COLORS.patternCycle;
+    if (pattern === 'smurfing') return COLORS.patternSmurfing;
+    if (pattern === 'shell_chain') return COLORS.patternShell;
+    return COLORS.edgeHighlight;
+  }, []);
 
   // ── Window resize handling ────────────────────────────────────────────────
   useEffect(() => {
@@ -346,16 +392,39 @@ function GraphVisualization({ data, fraudResults, riskIntelligence }) {
     const isSelected = selectedNode?.id === node.id;
     const isHighlighted = highlightNodes.has(node.id);
     const isHovered = hoverNode?.id === node.id;
-    const isDimmed = highlightNodes.size > 0 && !isHighlighted;
 
-    const r = node.size * (isHovered ? 1.15 : 1);
-    const alpha = isDimmed ? 0.2 : 1;
+    // Pattern highlight mode
+    const isPatternNode = activePattern ? patternNodeSets[activePattern]?.has(node.id) : false;
+    const patternActive = !!activePattern;
+
+    const isDimmed = patternActive
+      ? !isPatternNode && !isSelected
+      : (highlightNodes.size > 0 && !isHighlighted);
+
+    const r = node.size * (isHovered ? 1.15 : isPatternNode ? 1.2 : 1);
+    const alpha = isDimmed ? 0.12 : 1;
 
     ctx.save();
     ctx.globalAlpha = alpha;
 
-    // Glow effect for ring members and suspicious nodes
-    if (node.isInRing && !isDimmed) {
+    // Pattern highlight glow (takes priority when a pattern button is active)
+    if (isPatternNode && patternActive && !isDimmed) {
+      const pColor = getPatternColor(activePattern);
+      // Bright outer glow
+      ctx.beginPath();
+      ctx.arc(node.x, node.y, r + 8, 0, Math.PI * 2);
+      ctx.fillStyle = pColor + '33'; // 20% opacity
+      ctx.fill();
+      // Pulsing ring
+      ctx.beginPath();
+      ctx.arc(node.x, node.y, r + 5, 0, Math.PI * 2);
+      ctx.strokeStyle = pColor;
+      ctx.lineWidth = 2.5 / globalScale;
+      ctx.setLineDash([5 / globalScale, 3 / globalScale]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    } else if (node.isInRing && !isDimmed) {
+      // Glow effect for ring members and suspicious nodes
       ctx.beginPath();
       ctx.arc(node.x, node.y, r + 6, 0, Math.PI * 2);
       ctx.fillStyle = 'rgba(239, 68, 68, 0.15)';
@@ -376,14 +445,17 @@ function GraphVisualization({ data, fraudResults, riskIntelligence }) {
       ctx.fill();
     }
 
-    // Node fill
+    // Node fill — pattern nodes use the pattern color
     ctx.beginPath();
     ctx.arc(node.x, node.y, r, 0, Math.PI * 2);
-    ctx.fillStyle = node.color;
+    ctx.fillStyle = (isPatternNode && patternActive) ? getPatternColor(activePattern) : node.color;
     ctx.fill();
 
-    // Node stroke — ring members get a thick colored border
-    if (node.isInRing) {
+    // Node stroke — pattern highlighted or ring members get thick colored border
+    if (isPatternNode && patternActive) {
+      ctx.strokeStyle = '#FFFFFF';
+      ctx.lineWidth = (isSelected ? 4 : 3) / globalScale;
+    } else if (node.isInRing) {
       ctx.strokeStyle = '#EF4444';
       ctx.lineWidth = (isSelected ? 4 : 3) / globalScale;
     } else if (node.isSuspicious) {
@@ -395,8 +467,8 @@ function GraphVisualization({ data, fraudResults, riskIntelligence }) {
     }
     ctx.stroke();
 
-    // Label (only on hover/select or zoomed in)
-    if ((isHovered || isSelected || globalScale > 1.5) && !isDimmed) {
+    // Label — always show for pattern-highlighted nodes
+    if ((isHovered || isSelected || isPatternNode || globalScale > 1.5) && !isDimmed) {
       const fontSize = Math.max(10, 12 / globalScale);
       ctx.font = `600 ${fontSize}px Inter, system-ui, sans-serif`;
       ctx.textAlign = 'center';
@@ -406,7 +478,7 @@ function GraphVisualization({ data, fraudResults, riskIntelligence }) {
     }
 
     ctx.restore();
-  }, [selectedNode, highlightNodes, hoverNode]);
+  }, [selectedNode, highlightNodes, hoverNode, activePattern, patternNodeSets, getPatternColor]);
 
   // ── Canvas: Draw edges ────────────────────────────────────────────────────
   const drawLink = useCallback((link, ctx, globalScale) => {
@@ -416,12 +488,22 @@ function GraphVisualization({ data, fraudResults, riskIntelligence }) {
 
     const isHighlighted = highlightLinks.has(link);
     const isHovered = hoverLink === link;
-    const isDimmed = highlightLinks.size > 0 && !isHighlighted;
+
+    // Pattern link highlighting
+    const srcId = start.id || link.source;
+    const tgtId = end.id || link.target;
+    const isPatternLink = activePattern ? patternLinkSets.has(`${srcId}->${tgtId}`) : false;
+    const patternActive = !!activePattern;
+
+    const isDimmed = patternActive
+      ? !isPatternLink && !isHighlighted
+      : (highlightLinks.size > 0 && !isHighlighted);
 
     const baseColor = link.isSuspicious ? COLORS.edgeSuspicious : COLORS.edgeDefault;
-    const color = isHighlighted || isHovered ? COLORS.edgeHighlight : baseColor;
-    const width = Math.max(1, (isHighlighted ? link.width * 2 : link.width * 1.2)) / globalScale;
-    const alpha = isDimmed ? 0.08 : isHighlighted ? 1 : 0.5;
+    const pColor = patternActive ? getPatternColor(activePattern) : COLORS.edgeHighlight;
+    const color = isPatternLink ? pColor : (isHighlighted || isHovered ? COLORS.edgeHighlight : baseColor);
+    const width = Math.max(1, (isPatternLink ? link.width * 3 : isHighlighted ? link.width * 2 : link.width * 1.2)) / globalScale;
+    const alpha = isDimmed ? 0.05 : isPatternLink ? 1 : isHighlighted ? 1 : 0.5;
 
     // Calculate straight line with slight offset for visual clarity
     const dx = end.x - start.x;
@@ -446,8 +528,8 @@ function GraphVisualization({ data, fraudResults, riskIntelligence }) {
     ctx.quadraticCurveTo(mx, my, end.x, end.y);
     ctx.stroke();
 
-    // Flowing animation for highlighted edges
-    if (isHighlighted || isHovered) {
+    // Flowing animation for highlighted or pattern edges
+    if (isPatternLink || isHighlighted || isHovered) {
       ctx.strokeStyle = '#FFFFFF';
       ctx.lineWidth = width * 0.4;
       ctx.setLineDash([4 / globalScale, 12 / globalScale]);
@@ -484,7 +566,7 @@ function GraphVisualization({ data, fraudResults, riskIntelligence }) {
     ctx.fill();
 
     ctx.restore();
-  }, [highlightLinks, hoverLink, flowOffset]);
+  }, [highlightLinks, hoverLink, flowOffset, activePattern, patternLinkSets, getPatternColor]);
 
   // ── Render ────────────────────────────────────────────────────────────────
   const suspiciousCount = graphData.nodes.filter(n => n.isSuspicious).length;
@@ -505,6 +587,43 @@ function GraphVisualization({ data, fraudResults, riskIntelligence }) {
             )}
           </div>
         </div>
+
+        {/* ── Pattern Highlight Buttons ── */}
+        {fraudResults && (
+          <div className="gv-pattern-buttons">
+            <span className="gv-pattern-label">Highlight Pattern:</span>
+            <button
+              className={`gv-pattern-btn gv-pattern-cycle ${activePattern === 'cycle' ? 'active' : ''}`}
+              onClick={() => setActivePattern(prev => prev === 'cycle' ? null : 'cycle')}
+              title="Highlight Circular Fund Routing (Cycles)"
+            >
+              🔄 Cycles
+              {patternNodeSets.cycle.size > 0 && (
+                <span className="gv-pattern-count">{patternNodeSets.cycle.size}</span>
+              )}
+            </button>
+            <button
+              className={`gv-pattern-btn gv-pattern-smurfing ${activePattern === 'smurfing' ? 'active' : ''}`}
+              onClick={() => setActivePattern(prev => prev === 'smurfing' ? null : 'smurfing')}
+              title="Highlight Smurfing Patterns (Fan-in / Fan-out)"
+            >
+              📥📤 Smurfing
+              {patternNodeSets.smurfing.size > 0 && (
+                <span className="gv-pattern-count">{patternNodeSets.smurfing.size}</span>
+              )}
+            </button>
+            <button
+              className={`gv-pattern-btn gv-pattern-shell ${activePattern === 'shell_chain' ? 'active' : ''}`}
+              onClick={() => setActivePattern(prev => prev === 'shell_chain' ? null : 'shell_chain')}
+              title="Highlight Layered Shell Networks"
+            >
+              🏢 Shell Networks
+              {patternNodeSets.shell_chain.size > 0 && (
+                <span className="gv-pattern-count">{patternNodeSets.shell_chain.size}</span>
+              )}
+            </button>
+          </div>
+        )}
         <div className="gv-toolbar-right">
           <div className="gv-control-group">
             <label>Neighbor Depth</label>
@@ -655,6 +774,18 @@ function GraphVisualization({ data, fraudResults, riskIntelligence }) {
               <span className="gv-legend-dot" style={{background: COLORS.nodeHigh, border: '2px dashed #EF4444', boxShadow: '0 0 6px rgba(239,68,68,0.5)'}}></span>
               <span>Ring Member</span>
             </div>
+            {activePattern && (
+              <>
+                <div className="gv-legend-sep"></div>
+                <div className="gv-legend-title">Active Filter</div>
+                <div className="gv-legend-item">
+                  <span className="gv-legend-dot" style={{background: getPatternColor(activePattern), boxShadow: `0 0 8px ${getPatternColor(activePattern)}80`}}></span>
+                  <span>
+                    {activePattern === 'cycle' ? 'Cycle Members' : activePattern === 'smurfing' ? 'Smurfing Accounts' : 'Shell Network'}
+                  </span>
+                </div>
+              </>
+            )}
           </div>
         </div>
 
