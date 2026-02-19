@@ -130,13 +130,36 @@ Real accounts have diverse transaction patterns. Shell accounts exist solely to 
 | Pattern | Points | Rationale |
 |---------|--------|-----------|
 | Cycle member | +40 | Strongest indicator |
-| Fan-in hub | +30 | Collection phase |
-| Fan-out hub | +30 | Distribution phase |
-| Shell intermediate | +20 | Obscuration tactic |
+| Fan-in hub | +45 | Collection phase |
+| Fan-in source | +45 | Smurf account |
+| Fan-out hub | +45 | Distribution phase |
+| Fan-out destination | +45 | Receiving dispersed funds |
+| Shell intermediate | +45 | Obscuration tactic |
+
+### Penalties (False Positive Control):
+
+**Bidirectional Activity Penalty (0.3x):**
+- Triggered when in-degree >10 AND out-degree >10
+- Balanced in/out ratio (>0.3) indicates exchange or marketplace
+- Rationale: Real exchanges have money flowing both directions
+
+**Long Time Spread Penalty (0.4x):**
+- Transactions spread over 14+ days with high volume (>20 txns)
+- Rationale: Legitimate business activity is ongoing, not burst
+
+**High Volume Penalty (0.5x):**
+- More than 50 total transactions
+- Rationale: Real merchants/services have sustained activity
+
+**Consistent Amounts Penalty (0.4x):**
+- Coefficient of variation < 0.2 (very consistent amounts)
+- Rationale: Payroll systems have regular, identical payments
+
+---
 
 ### Multipliers:
 
-**Velocity Multiplier (1.0 - 2.0x):**
+**Velocity Multiplier (1.0 - 1.5x):**
 - Rapid consecutive transactions (< 24 hours apart)
 - Formula: `1 + (rapid_count × 0.1)`
 - Rationale: Speed indicates urgency to move illicit funds

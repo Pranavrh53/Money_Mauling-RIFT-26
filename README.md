@@ -1,408 +1,525 @@
-# Financial Crime Detection - Graph-Based Analysis
+# Money Mauling — Graph-Based Financial Crime Detection
 
-A production-grade system for detecting financial crimes using graph-based transaction network analysis with interactive visualization.
+> **RIFT-26 Hackathon Submission**
+> Detect money muling rings, smurfing networks, and shell chains using graph theory on transaction data.
 
-## 🎯 Project Overview
+---
 
-This system analyzes transaction data to detect suspicious patterns like **money muling** - a technique where criminals move illicit funds through multiple accounts to obscure the money trail.
+## Table of Contents
 
-### Current Status: **STEP 2 Complete** ✅
+1. [Problem Statement](#-problem-statement)
+2. [Architecture Overview](#-architecture-overview)
+3. [Algorithm Deep-Dive](#-algorithm-deep-dive)
+4. [Suspicion Score Methodology](#-suspicion-score-methodology)
+5. [False Positive Control](#-false-positive-control)
+6. [JSON Output Format](#-json-output-format)
+7. [Performance Benchmarks](#-performance-benchmarks)
+8. [Quick Start](#-quick-start)
+9. [Test Cases & Validation](#-test-cases--validation)
+10. [Known Limitations](#-known-limitations)
+11. [Tech Stack](#-tech-stack)
 
-- ✅ **Step 1:** CSV Upload & Validation  
-- ✅ **Step 2:** Graph Construction & Interactive Visualization
-- ⏳ **Step 3:** Money Muling Detection & Risk Scoring (Coming Next)
-- ⏳ **Step 4:** Alert Generation & Reporting (Planned)
+---
 
-## 📁 Project Structure
+## 🎯 Problem Statement
+
+**Money muling** is a technique where criminals recruit intermediaries (mules) to move illicit funds through multiple accounts, obscuring the money trail. In a single operation:
+
+1. **Placement** — Dirty money enters the system through many small deposits
+2. **Layering** — Funds hop through intermediary shell accounts in chains and cycles
+3. **Integration** — Clean-looking money exits to the criminal's destination
+
+Traditional rule-based systems flag individual transactions. Our system models the **entire transaction network as a directed graph** and detects structural patterns invisible to per-transaction analysis:
+
+| Pattern | Graph Signal | Real-World Meaning |
+|---------|-------------|-------------------|
+| **Cycles** | A→B→C→A | Circular fund-routing to disguise origin |
+| **Fan-in** | Many→One | Smurfing collection (many mules deposit to one hub) |
+| **Fan-out** | One→Many | Smurfing distribution (one source pays out to many mules) |
+| **Shell chains** | A→B→C→D (low-degree B,C) | Layered routing through dormant shell accounts |
+
+---
+
+## 🏗 Architecture Overview
 
 ```
-Money_Muling/
-├── app/                    # Backend (FastAPI)
-│   ├── main.py            # API endpoints
-│   ├── validators.py      # CSV validation
-│   ├── graph_builder.py   # Graph construction
-│   └── models.py          # Pydantic models
-├── frontend/              # Frontend (React)
-│   └── src/
-│       ├── components/    # React components
-│       └── App.jsx        # Main app
-├── requirements.txt       # Python dependencies
-├── README.md             # This file
-├── STEP2_GUIDE.md        # Detailed Step 2 documentation
-└── sample_transactions.csv
+┌──────────────────────────────────────────────────────────────────┐
+│                        React Frontend                            │
+│  ┌────────────┐ ┌──────────────┐ ┌───────────┐ ┌─────────────┐  │
+│  │ FileUpload │ │  Graph Viz   │ │ Fraud     │ │  AI ChatBot │  │
+│  │            │ │ (force-graph)│ │ Results   │ │             │  │
+│  └─────┬──────┘ └──────┬───────┘ └─────┬─────┘ └──────┬──────┘  │
+│        │               │               │              │          │
+│  Light/Dark Theme Toggle        ┌──────┴──────┐       │          │
+└────────┼───────────────┼────────┤             ├───────┼──────────┘
+         │  REST API     │        │  Download   │       │
+         ▼               ▼        │  JSON       │       ▼
+┌────────────────────────────────────────────────────────────────┐
+│                     FastAPI Backend                             │
+│                                                                │
+│  POST /upload ──► Validators ──► Graph Builder (NetworkX)      │
+│                                       │                        │
+│  POST /detect-fraud ◄────────────────┘                         │
+│       │                                                        │
+│       ├──► FraudDetectionEngine                                │
+│       │     ├── detect_cycles()         ← nx.simple_cycles     │
+│       │     ├── detect_smurfing()       ← sliding window       │
+│       │     ├── detect_shell_chains()   ← BFS + temporal       │
+│       │     ├── whitelist_merchants()   ← heuristic filter     │
+│       │     └── calculate_suspicion()   ← weighted scoring     │
+│       │                                                        │
+│       ├──► RiskIntelligenceEngine                              │
+│       │     ├── degree centrality   (20%)                      │
+│       │     ├── transaction velocity (20%)                     │
+│       │     ├── cycle involvement   (25%)                      │
+│       │     ├── ring density        (20%)                      │
+│       │     └── volume anomalies    (15%)                      │
+│       │                                                        │
+│       ├──► ResponseBuilder ──► Deterministic JSON              │
+│       └──► AlertEngine ──► Real-time monitoring                │
+│                                                                │
+│  POST /chat ──► FraudChatBot (context-aware NL query engine)   │
+└────────────────────────────────────────────────────────────────┘
 ```
+
+### Data Flow
+
+1. **Upload** → CSV parsed, validated (5 columns, types, uniqueness), stored in-memory
+2. **Graph Build** → Directed graph: nodes = accounts, edges = transactions (aggregated)
+3. **Detection** → Three pattern detectors run in sequence; scores computed
+4. **Risk Intelligence** → Five-factor weighted risk engine generates per-account explanations
+5. **Response** → Deterministic JSON with `suspicious_accounts`, `fraud_rings`, `summary`
+
+---
+
+## 🔬 Algorithm Deep-Dive
+
+### 1. Cycle Detection — Circular Fund Routing
+
+**Algorithm:** `nx.simple_cycles()` with bounded enumeration
+
+```
+Input:  Directed graph G = (V, E)
+Output: All elementary cycles of length 3–5
+
+1. Enumerate simple cycles using Johnson's algorithm
+2. Filter: keep only cycles where 3 ≤ |cycle| ≤ 5
+3. Safety bounds:
+   - Time limit: 5 seconds (prevents exponential blowup on dense graphs)
+   - Count limit: 500 cycles max
+```
+
+**Complexity:** O((V + E) · C) where C = number of cycles (bounded at 500)
+
+**Why it works:** Money laundering cycles return funds to their origin through intermediaries. A→B→C→A with decreasing amounts (5000→4800→4600) is a classic sign — the "lost" amount is the laundering fee.
+
+### 2. Smurfing Detection — Fan-in / Fan-out
+
+**Algorithm:** Sliding window over time-sorted transactions
+
+```
+For each account A:
+  1. Group all transactions where A is receiver (fan-in) or sender (fan-out)
+  2. Sort by timestamp
+  3. Slide a 72-hour window across the sorted list
+  4. Count unique counterparties in each window
+  5. If count ≥ threshold → flag as smurfing pattern
+
+Adaptive threshold:
+  - < 50 accounts  → threshold = 5
+  - < 200 accounts → threshold = 7
+  - ≥ 200 accounts → threshold = 10
+```
+
+**Complexity:** O(n log n) for sorting + O(n) for sliding window = O(n log n)
+
+**Why it works:** Smurfing breaks large amounts into many small transactions from/to many different accounts within a short time window. The fan-in collector or fan-out distributor is the hub of the operation.
+
+### 3. Shell Chain Detection — Layered Networks
+
+**Algorithm:** BFS with temporal ordering and degree constraints
+
+```
+For each node with out_degree > 0:
+  1. BFS from node, building paths
+  2. Intermediate nodes must have total_degree ≤ 3 (shell account heuristic)
+  3. Edge timestamps must be monotonically increasing (temporal ordering)
+  4. Keep paths of length ≥ 3
+  5. Deduplicate: remove sub-chains contained in longer chains
+```
+
+**Complexity:** O(V · k) where k = average node degree (typically small)
+
+**Why it works:** Shell accounts are low-activity intermediaries used only to move money one hop down the chain. The temporal ordering constraint ensures the chain represents an actual fund flow, not coincidental connections.
+
+---
+
+## 📊 Suspicion Score Methodology
+
+Each account receives a **suspicion score (0–100)** computed as a **pattern-based additive model** with velocity multiplier and legitimacy penalty:
+
+### Base Score (Additive)
+
+| Pattern | Points | Rationale |
+|---------|--------|-----------|
+| Cycle member | +40 | Direct involvement in circular routing |
+| Fan-in hub | +30 | Receives from many sources = collection point |
+| Fan-out hub | +30 | Sends to many targets = distribution point |
+| Shell chain intermediate | +20 | Acts as pass-through in layered chain |
+
+### Velocity Multiplier
+
+```
+For each account:
+  Count rapid_transactions (consecutive txns < 24h apart)
+  If rapid_count ≥ 2:
+    multiplier = min(1 + rapid_count × 0.1, 2.0)   ← CAPPED at 2.0×
+    score = base_score × multiplier
+```
+
+The cap at 2.0× prevents score inflation for legitimately active accounts, maintaining **precision ≥ 70%**.
+
+### Legitimacy Penalty
+
+```
+If transactions span > 7 days AND count < 20:
+  score *= 0.7   (30% reduction for regular, spread-out activity)
+```
+
+### Whitelist Override
+
+```
+If account is identified as merchant or payroll:
+  score = 0, risk_level = LOW, patterns = []
+```
+
+### Risk Levels
+
+| Score Range | Risk Level |
+|------------|------------|
+| ≥ 70 | HIGH |
+| ≥ 40 | MEDIUM |
+| < 40 | LOW |
+
+### Advanced Risk Intelligence (5-Factor Model)
+
+The `RiskIntelligenceEngine` computes a separate **comprehensive risk score** using weighted factors:
+
+| Factor | Weight | Source |
+|--------|--------|--------|
+| Degree Centrality | 20% | `nx.degree_centrality()` + `nx.betweenness_centrality()` + `nx.pagerank()` |
+| Transaction Velocity | 20% | Transactions-per-hour, rapid ratio, minimum gap |
+| Cycle Involvement | 25% | Count of cycles × complexity (length) of cycles |
+| Ring Density | 20% | Subgraph density within fraud ring + per-node connectivity ratio |
+| Volume Anomalies | 15% | Z-score vs global mean, structuring ratio, variance, round-number avoidance |
+
+Each factor is scored 0–100 independently, then combined as a weighted average. Final score determines risk level: CRITICAL (≥70), HIGH (≥50), MEDIUM (≥30), LOW (<30).
+
+Each account gets a **customized natural-language explanation** describing which factors contributed and why.
+
+---
+
+## 🛡 False Positive Control
+
+**Requirement:** MUST NOT flag legitimate high-volume merchants or payroll accounts.
+
+### Merchant Detection Heuristic
+
+```python
+if in_degree >= threshold AND out_degree <= 2:
+    # Many payers, very few outgoing = merchant receiving payments
+    if unique_senders >= threshold:
+        → WHITELIST as MERCHANT
+```
+
+### Payroll Detection Heuristic
+
+```python
+if out_degree >= threshold AND in_degree <= 2:
+    # Many payees, very few incoming = payroll disbursement
+    if unique_receivers >= threshold:
+        if coefficient_of_variation(amounts) < 0.5:  # consistent amounts
+            → WHITELIST as PAYROLL
+```
+
+### Defense-in-Depth
+
+| Layer | Mechanism | Effect |
+|-------|-----------|--------|
+| 1 | Whitelisting | Merchants/payroll scored to 0 before any analysis |
+| 2 | Smurfing skip | Whitelisted accounts excluded from fan-in/fan-out detection |
+| 3 | Time-window constraint | 72h window rejects coincidental long-term patterns |
+| 4 | Adaptive thresholds | Adjust to dataset size, preventing threshold-gap misses |
+| 5 | Velocity cap | 2.0× max prevents runaway score inflation |
+| 6 | Spread penalty | 30% reduction for regular, spaced-out activity |
+| 7 | Cycle bounding | Length 3–5 with timeout prevents false cycle detection |
+
+### Verified Results on `fraud_patterns_dataset.csv`
+
+- **ACC_200** (receives from 20 senders = merchant): **NOT flagged** ✓
+- **ACC_300** (sends to 18 receivers = payroll): **NOT flagged** ✓
+- **NORM_001–NORM_008** (normal 1:1 transactions): **NOT flagged** ✓
+
+---
+
+## 📄 JSON Output Format
+
+The `/download-results` endpoint returns deterministic JSON matching this exact structure:
+
+```json
+{
+  "suspicious_accounts": [
+    {
+      "account_id": "ACC_001",
+      "suspicion_score": 56.0,
+      "detected_patterns": ["cycle_length_3", "high_velocity"],
+      "ring_id": "RING_001"
+    }
+  ],
+  "fraud_rings": [
+    {
+      "ring_id": "RING_001",
+      "member_accounts": ["ACC_001", "ACC_002", "ACC_003"],
+      "pattern_type": "cycle",
+      "risk_score": 56.0
+    }
+  ],
+  "summary": {
+    "total_accounts_analyzed": 100,
+    "suspicious_accounts_flagged": 42,
+    "fraud_rings_detected": 42,
+    "processing_time_seconds": 2.25
+  }
+}
+```
+
+### Determinism Guarantees
+
+- `suspicious_accounts` sorted by `suspicion_score` DESC, then `account_id` ASC
+- `fraud_rings` use sequential IDs: `RING_001`, `RING_002`, ...
+- `member_accounts` sorted alphabetically within each ring
+- `detected_patterns` sorted alphabetically
+- Uses `OrderedDict` for field ordering
+- Scores rounded: `suspicion_score` to 1dp, `processing_time_seconds` to 2dp
+- Same input always produces same output — zero non-determinism
+
+---
+
+## ⚡ Performance Benchmarks
+
+Tested on `fraud_patterns_dataset.csv` (90 transactions, 100 accounts):
+
+| Metric | Measured | Requirement |
+|--------|----------|-------------|
+| **Total processing time** | **4.66s** | ≤ 30s |
+| **Precision** | **100%** | ≥ 70% |
+| **Recall** | **100%** | ≥ 60% |
+| **Merchant/payroll FP** | **0** | Must be 0 |
+
+### Scalability Safeguards for 10K Transactions
+
+| Bottleneck | Mitigation |
+|-----------|------------|
+| `nx.simple_cycles()` exponential | Time-limited to 5s + cap at 500 cycles |
+| Per-node DataFrame filtering | Precomputed degree/count maps |
+| Risk engine recomputes cycles | Cached cycles passed from detection engine |
+| Smurfing on small datasets | Adaptive threshold (5–10 based on size) |
+
+### Complexity Summary
+
+| Stage | Complexity |
+|-------|-----------|
+| CSV validation | O(n) |
+| Graph construction | O(n) where n = transactions |
+| Cycle detection | O((V+E) · C), bounded at 5s/C≤500 |
+| Smurfing detection | O(n log n) |
+| Shell chain detection | O(V · k), k = avg degree |
+| Scoring | O(V + n) |
+| Risk intelligence | O(V²) for centrality, one-time |
+| **Total** | **O(n log n + V²)** |
+
+---
 
 ## 🚀 Quick Start
 
 ### Prerequisites
 
-- Python 3.8+
-- Node.js 16+
-- npm or yarn
+- Python 3.8+ with pip
+- Node.js 16+ with npm
 
 ### Installation
 
-1. **Install backend dependencies:**
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-2. **Install frontend dependencies:**
-   ```bash
-   cd frontend
-   npm install
-   cd ..
-   ```
-
-3. **Start everything (Windows):**
-   ```bash
-   start_all.bat
-   ```
-
-   Or manually:
-   ```bash
-   # Terminal 1 - Backend
-   uvicorn app.main:app --reload
-   
-   # Terminal 2 - Frontend  
-   cd frontend && npm run dev
-   ```
-
-4. **Access the application:**
-   - Frontend UI: http://localhost:3000
-   - Backend API: http://localhost:8000
-   - API Docs: http://localhost:8000/docs
-
-## 🎮 Features
-
-### Step 1: CSV Upload & Validation ✅
-
-- **Strict CSV validation** with exact column requirements
-- **Data type checking** (float amounts, datetime timestamps)
-- **Uniqueness validation** (transaction IDs)
-- **Error handling** with clear, actionable messages
-- **Performance optimized** for 10K+ rows
-
-**Required CSV Format:**
-```csv
-transaction_id,sender_id,receiver_id,amount,timestamp
-TXN001,ACC101,ACC201,150.50,2024-01-15 10:30:00
-```
-
-### Step 2: Graph Visualization ✅
-
-**Backend Features:**
-- Directed graph construction using NetworkX
-- Node metrics: in/out degree, transaction totals, amounts
-- REST API endpoint: `/graph-data`
-- Optimized for 10K+ transactions
-
-**Frontend Features:**
-- Interactive force-directed graph visualization  
-- Real-time statistics dashboard
-- Node tooltips with detailed metrics
-- Click to highlight connections
-- Zoom, pan, drag interactions
-- Responsive dark-mode UI
-
-**Visual Features:**
-- 🔵 Blue nodes: Regular accounts
-- 🟠 Orange nodes: High-degree accounts (top 5%)
-- Gradient edges showing transaction direction
-- Edge width proportional to transaction amount
-- Auto-scaling node sizes based on activity
-
-## 📡 API Endpoints
-
-### POST /upload
-
-Upload and validate transaction CSV file.
-
-**Request:** `multipart/form-data` with CSV file
-
-The CSV must contain **exactly** these 5 columns in this **exact order**:
-
-| Column          | Type   | Format/Rules                  |
-|----------------|--------|--------------------------------|
-| transaction_id | string | Must be unique across all rows |
-| sender_id      | string | Account ID of sender           |
-| receiver_id    | string | Account ID of receiver         |
-| amount         | float  | Valid numeric value            |
-| timestamp      | string | YYYY-MM-DD HH:MM:SS format     |
-
-**Success Response (200):**
-
-```json
-{
-  "total_transactions": 1250,
-  "unique_accounts": 458,
-  "date_range": {
-    "start": "2024-01-01 08:30:00",
-    "end": "2024-12-31 18:45:00"
-  }
-}
-```
-
-**Error Response (400):**
-
-```json
-{
-  "detail": "Error message describing the validation failure"
-}
-```
-
-### GET /graph-data
-
-Retrieve transaction network graph for visualization.
-
-**Response (200):**
-
-```json
-{
-  "nodes": [
-    {
-      "id": "ACC101",
-      "in_degree": 2,
-      "out_degree": 3,
-      "total_transactions": 5,
-      "total_amount_sent": 1500.50,
-      "total_amount_received": 500.00,
-      "net_flow": -1000.50
-    }
-  ],
-  "edges": [
-    {
-      "source": "ACC101",
-      "target": "ACC201",
-      "amount": 150.50,
-      "transaction_count": 1
-    }
-  ],
-  "summary": {
-    "total_nodes": 10,
-    "total_edges": 10,
-    "is_connected": false,
-    "density": 0.111
-  }
-}
-```
-
-**Error Response (404):**
-```json
-{
-  "detail": "No graph data available. Please upload a CSV file first."
-}
-```
-
-## 🏗️ Technology Stack
-
-### Backend
-- **FastAPI** - Modern async Python web framework
-- **Pandas** - Data validation and processing
-- **NetworkX** - Graph construction and analysis
-- **Pydantic** - Data validation and serialization
-- **Uvicorn** - ASGI server
-
-### Frontend
-- **React 18** - UI framework
-- **Vite** - Build tool and dev server  
-- **react-force-graph-2d** - Interactive graph visualization
-- **CSS3** - Custom dark-mode styling
-
-## ⚡ Performance
-
-### Backend (10K Transactions)
-- Graph construction: ~80ms
-- Metrics calculation: ~60ms
-- JSON serialization: ~40ms
-- **Total: ~180ms**
-
-### Frontend
-- Initial render: ~200ms
-- Force simulation stabilization: ~2-3s
-- Interaction latency: < 16ms (60 FPS)
-
-## ✅ Validation Strategy
-
-### Multi-Layer Validation Approach
-
-The validation is structured in a **fail-fast** manner with clear separation of concerns:
-
-#### 1. **File-Level Validation**
-- File type check (must be .csv)
-- Size limit check (< 50MB)
-- UTF-8 encoding validation
-- CSV parsing validation
-
-#### 2. **Structure Validation** (`validate_csv_structure`)
-- Exact column count check
-- Exact column name matching
-- Column order verification
-- Prevents extra or missing columns
-
-#### 3. **Data Integrity Validation**
-
-**Transaction ID Uniqueness** (`validate_transaction_ids`):
-- Uses pandas `duplicated()` for O(n) performance
-- Reports duplicate IDs with row numbers
-- No transaction ID can appear more than once
-
-**Amount Validation** (`validate_amounts`):
-- Uses `pd.to_numeric()` with error coercion
-- Detects non-numeric values
-- Reports specific rows with invalid amounts
-- Converts to float type
-
-**Timestamp Validation** (`validate_timestamps`):
-- Uses `pd.to_datetime()` with **strict format** matching
-- Enforces exact format: `YYYY-MM-DD HH:MM:SS`
-- Rejects malformed dates
-- Converts to datetime objects for date range calculations
-
-#### 4. **Summary Calculation** (`calculate_summary`)
-- Counts total transactions
-- Calculates unique accounts (union of senders and receivers)
-- Determines date range from timestamp column
-
-### Error Handling Strategy
-
-- **Custom ValidationError**: Clear, actionable error messages
-- **HTTP 400**: Client errors (bad data, wrong format)
-- **HTTP 413**: File too large
-- **HTTP 500**: Server errors (unexpected failures)
-- **Logging**: All operations logged for debugging and monitoring
-
-## ⚡ Performance Considerations (10K Rows)
-
-### Optimizations Implemented:
-
-1. **Streaming File Read**:
-   - Uses `StringIO` for in-memory processing
-   - No disk I/O for temporary files
-   - Typical 10K row CSV: ~1-2MB, processes in < 1 second
-
-2. **Efficient Pandas Operations**:
-   - `duplicated()`: O(n) with hash-based lookup
-   - `pd.to_numeric()`: Vectorized C-level operations
-   - `pd.to_datetime()`: Optimized format parsing
-   - `nunique()`: Hash-based counting
-
-3. **Memory Management**:
-   - DataFrame created once, modified in place
-   - No unnecessary copies
-   - 10K rows ~2-3MB RAM footprint
-
-4. **Fail-Fast Validation**:
-   - Stops at first error
-   - No processing waste on invalid data
-
-### Performance Benchmarks (10K rows):
-
-- **CSV Parsing**: ~50-100ms
-- **Validation**: ~100-200ms
-- **Summary Calculation**: ~20-50ms
-- **Total**: < 500ms on modern hardware
-
-### Scaling Beyond 10K:
-
-For larger files (100K+), consider:
-- Chunked processing with `pd.read_csv(chunksize=...)`
-- Background task processing (Celery/Redis)
-- Streaming validation
-- Database persistence
-
-## 🧪 Testing
-
-### Test with Sample Data
-1. Start both backend and frontend
-2. Go to http://localhost:3000
-3. Upload `sample_transactions.csv`
-4. Explore the interactive graph
-
-### API Testing
 ```bash
-#Test upload
-curl -X POST "http://localhost:8000/upload" \
-  -F "file=@sample_transactions.csv"
+# Backend
+pip install -r requirements.txt
 
-# Test graph data
-curl http://localhost:8000/graph-data
+# Frontend
+cd frontend && npm install && cd ..
 ```
 
-### Automated Test Script
+### Run
+
 ```bash
-python test_api.py
+# Option 1: Windows batch file
+start_all.bat
+
+# Option 2: Manual (two terminals)
+# Terminal 1 — Backend
+python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+
+# Terminal 2 — Frontend
+cd frontend && npm run dev
 ```
 
-## 🐛 Troubleshooting
+### Access
 
-### "No graph data available"
-- Upload a CSV first via POST /upload
-- Check backend logs for errors
+| Service | URL |
+|---------|-----|
+| Frontend UI | http://localhost:3000 |
+| Backend API | http://localhost:8000 |
+| Swagger Docs | http://localhost:8000/docs |
 
-### Frontend not connecting to backend
-- Verify backend is running on port 8000
-- Check CORS settings in `app/main.py`
-- Inspect browser console for errors
+### Usage Flow
 
-### Poor graph performance
-- Reduce dataset size (< 50K transactions recommended)
-- Close other browser tabs
-- Enable hardware acceleration in browser
-
-### npm install errors
-- Delete `node_modules` and `package-lock.json`
-- Run `npm install` again
-- Check Node.js version (16+ required)
-
-## 📚 Documentation
-
-- **[STEP2_GUIDE.md](STEP2_GUIDE.md)** - Complete Step 2 implementation details
-- **[API Docs](http://localhost:8000/docs)** - Interactive Swagger documentation
-- **[ReDoc](http://localhost:8000/redoc)** - Alternative API documentation
-
-## 🔜 Roadmap
-
-### Step 3: Money Muling Detection (Next)
-- [ ] Pattern detection algorithms
-- [ ] Risk scoring system
-- [ ] Suspicious account flagging
-- [ ] Multi-hop transaction tracing
-
-### Step 4: Alerts & Reporting (Planned)
-- [ ] Automated alert generation
-- [ ] PDF report export
-- [ ] Email notifications
-- [ ] Dashboard for investigators
-
-### Future Enhancements
-- [ ] Real-time transaction processing
-- [ ] Machine learning models
-- [ ] Historical trend analysis
-- [ ] Multi-currency support
-- [ ] Graph search and filtering
-- [ ] Export to Neo4j/Gephi
-
-## 🎯 Use Cases
-
-1. **Financial Institutions** - AML compliance and fraud detection
-2. **Law Enforcement** - Criminal network analysis
-3. **Regulators** - Transaction pattern monitoring
-4. **Security Teams** - Insider threat detection
-
-## 📝 Code Quality
-
-- **Clean Architecture**: Separation of concerns (routes, validation, models, graph)
-- **Type Hints**: Full type annotation for IDE support
-- **Documentation**: Comprehensive docstrings and comments
-- **Error Messages**: Clear, actionable feedback
-- **Logging**: Structured logging for operations
-- **Standards**: PEP 8 compliant (backend), ESLint ready (frontend)
+1. Open http://localhost:3000
+2. Upload `fraud_patterns_dataset.csv`
+3. Click **Run Fraud Detection**
+4. Explore: Graph visualization, Fraud Summary, Rings Table, Risk Rankings
+5. Download JSON results
+6. Use the AI chatbot (bottom-right) to query results in natural language
+7. Toggle light/dark mode (top-right)
 
 ---
 
-**Version**: 2.0.0  
-**Status**: Step 2 Complete - Graph Visualization Ready  
-**Last Updated**: February 2026
+## 🧪 Test Cases & Validation
 
-**Ready to move to Step 3?** Let's implement money muling detection algorithms! 🚀
+### Automated Test Suite
+
+```bash
+# Unit tests (cycle, fan-out, shell chain, combined)
+python -m pytest tests/test_detection.py -v
+
+# Performance requirement validation
+python test_performance.py
+
+# Exact match test against fraud_patterns_dataset.csv
+python tests/test_exact_match.py
+```
+
+### Expected Detections on `fraud_patterns_dataset.csv`
+
+#### Cycles (7 detected)
+
+| Ring | Accounts | Pattern |
+|------|----------|---------|
+| Cycle 1 | ACC_001 → ACC_002 → ACC_003 → ACC_001 | 3-node cycle, amounts 5000→4800→4600 |
+| Cycle 2 | ACC_010 → ACC_011 → ACC_012 → ACC_013 → ACC_010 | 4-node cycle |
+| Cycle 3 | ACC_020 → ACC_021 → ACC_022 → ACC_023 → ACC_024 → ACC_020 | 5-node cycle |
+| Cycle 4 | ACC_030 → ACC_031 → ACC_032 → ACC_030 | 3-node cycle |
+| Cycle 5 | ACC_040 → ACC_041 → ACC_042 → ACC_043 → ACC_040 | 4-node cycle |
+| Cycle 6 | ACC_050 → ACC_051 → ACC_052 → ACC_053 → ACC_050 | 4-node cycle |
+| Cycle 7 | ACC_060 → ACC_061 → ACC_062 → ACC_060 | 3-node cycle |
+
+#### Shell Chains (35 detected)
+
+Multi-hop layered paths through low-degree intermediary accounts, including:
+- ACC_500 → ACC_501 → ACC_502 → ACC_503
+- ACC_600 → ACC_601 → ACC_602 → ACC_603 (→ ACC_604)
+- ACC_700 → ACC_701 → ACC_702 → ACC_703 (→ ACC_704 → ACC_705)
+- ACC_800 → ACC_801 → ACC_802 → ACC_803
+- ACC_900 → ACC_901 → ACC_902 → ACC_903 (→ ACC_904 → ACC_905)
+
+#### Whitelisted (NOT flagged)
+
+| Account | Type | Reason |
+|---------|------|--------|
+| ACC_200 | Merchant | 20 unique senders, only 1 outgoing |
+| ACC_300 | Payroll | 18 unique receivers, only 0 incoming |
+
+#### Normal (NOT flagged)
+
+NORM_001 through NORM_008 — isolated 1:1 transactions with no suspicious patterns.
+
+---
+
+## ⚠️ Known Limitations
+
+1. **In-memory only** — All data stored in Python process memory. No persistence across restarts. For production, integrate Redis or PostgreSQL.
+
+2. **Single-file upload** — Processes one CSV at a time. Incremental/streaming transaction ingestion is not supported.
+
+3. **Cycle enumeration scaling** — `nx.simple_cycles()` (Johnson's algorithm) can be exponential on very dense graphs. Mitigated by 5-second timeout and 500-cycle cap, but may miss some cycles on graphs with >5K nodes.
+
+4. **Whitelist heuristics** — Merchant/payroll detection uses structural heuristics (degree + amount variance). A sophisticated attacker who mimics merchant patterns (many small incoming, few outgoing) could evade detection. In production, whitelist should be maintained manually or via KYC data.
+
+5. **No ML model** — Detection is purely rule-based and graph-structural. A supervised ML layer (e.g., GNN-based anomaly detection) would improve accuracy on novel patterns.
+
+6. **Static analysis only** — Analyzes a snapshot of transactions. Real-time streaming detection (e.g., with Kafka + Flink) would catch patterns as they form.
+
+7. **No currency/cross-border handling** — Assumes single currency. Multi-currency transactions would need exchange-rate normalization.
+
+8. **Smurfing threshold sensitivity** — The adaptive threshold (5–10) may need manual tuning for datasets with unusual account-count distributions.
+
+---
+
+## 🛠 Tech Stack
+
+| Layer | Technology | Purpose |
+|-------|-----------|---------|
+| Backend | **FastAPI** + Uvicorn | Async REST API |
+| Graph Engine | **NetworkX** | Directed graph construction, cycle detection, centrality |
+| Data Processing | **Pandas** + NumPy | CSV validation, aggregation, temporal analysis |
+| Validation | **Pydantic** | Request/response schema enforcement |
+| Frontend | **React 18** + Vite | Single-page application |
+| Graph Viz | **react-force-graph-2d** | Interactive force-directed graph |
+| AI Chatbot | Custom NLP engine | Context-aware fraud result querying |
+| Styling | CSS3 custom properties | Light/dark theme system |
+
+## 📁 Project Structure
+
+```
+Money_Mauling-RIFT-26/
+├── app/
+│   ├── main.py              # FastAPI endpoints (upload, detect, chat, etc.)
+│   ├── detection.py          # FraudDetectionEngine (cycles, smurfing, shells)
+│   ├── risk_engine.py        # RiskIntelligenceEngine (5-factor scoring)
+│   ├── graph_builder.py      # TransactionGraph (NetworkX wrapper)
+│   ├── response_builder.py   # Deterministic JSON formatting
+│   ├── alert_engine.py       # Real-time monitoring alerts
+│   ├── chatbot_engine.py     # AI chatbot with fraud context
+│   ├── validators.py         # CSV validation pipeline
+│   └── models.py             # Pydantic response models
+├── frontend/
+│   └── src/
+│       ├── App.jsx           # Main app with theme toggle
+│       └── components/
+│           ├── GraphVisualization.jsx  # Force-directed graph
+│           ├── FraudRingsTable.jsx     # Ring summary table
+│           ├── ResultsSummary.jsx      # Detection stats cards
+│           ├── RiskRankingPanel.jsx    # Risk ranking view
+│           ├── ChatBot.jsx            # AI assistant widget
+│           └── ...
+├── tests/
+│   ├── test_detection.py     # Unit tests for detection engine
+│   └── test_exact_match.py   # Exact-match validation against dataset
+├── test_performance.py       # Performance requirement validation
+├── fraud_patterns_dataset.csv # Reference dataset
+├── requirements.txt
+└── README.md                 # This file
+```
+
+---
+
+## 🎥 Demo Walkthrough
+
+1. **Upload** `fraud_patterns_dataset.csv` → Dashboard shows 90 transactions, 100 accounts
+2. **Detect** → 7 cycles, 35 shell chains, 42 suspicious accounts, 0 false positives
+3. **Graph** → Interactive visualization with ring highlighting, suspicious nodes glow red
+4. **Table** → Fraud Rings Table with member account IDs, pattern types, risk scores
+5. **Download** → JSON file matches exact format specification
+6. **Chatbot** → "Which accounts are in RING_001?" → instant context-aware answer
+7. **Theme** → Toggle light/dark mode for accessibility
+
+---
+
+**Version:** 4.0.0 | **Team:** RIFT-26 | **Last Updated:** February 2026

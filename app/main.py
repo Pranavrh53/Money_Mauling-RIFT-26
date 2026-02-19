@@ -347,11 +347,14 @@ async def detect_fraud():
         
         # Initialize Risk Intelligence Engine
         logger.info("Initializing Risk Intelligence Engine")
+        # Pass cached cycles and whitelist to avoid duplicate computation
         risk_engine = RiskIntelligenceEngine(
             graph=transaction_graph.graph,
             transactions_df=transactions_df,
             fraud_rings=results['fraud_rings'],
-            suspicious_accounts=results['suspicious_accounts']
+            suspicious_accounts=results['suspicious_accounts'],
+            cached_cycles=detector.detected_cycles,
+            whitelisted_accounts=detector.whitelisted_accounts
         )
         
         # Calculate comprehensive risk scores

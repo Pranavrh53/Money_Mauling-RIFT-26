@@ -157,6 +157,7 @@ class ResponseBuilder:
             ring_entry = OrderedDict([
                 ('ring_id', ring_id),
                 ('member_accounts', member_accounts),
+                ('member_count', len(member_accounts)),
                 ('pattern_type', pattern_type),
                 ('risk_score', round(float(ring.get('risk_score', 0)), 1))
             ])

@@ -1,5 +1,6 @@
 import React, { useRef, useEffect, useState, useMemo, useCallback } from 'react';
 import ForceGraph2D from 'react-force-graph-2d';
+import { forceX, forceY, forceCollide } from 'd3-force';
 import './GraphVisualization.css';
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -39,6 +40,16 @@ function GraphVisualization({ data, fraudResults, riskIntelligence }) {
   const [showOnlySuspicious, setShowOnlySuspicious] = useState(false);
   const [minAmount, setMinAmount] = useState(0);
   const [dimensions, setDimensions] = useState({ width: 900, height: 700 });
+  const [flowOffset, setFlowOffset] = useState(0);
+
+  // ── Animate flow on highlighted links ─────────────────────────────────────
+  useEffect(() => {
+    if (highlightLinks.size === 0) return;
+    const interval = setInterval(() => {
+      setFlowOffset(prev => (prev + 1) % 30);
+    }, 50);
+    return () => clearInterval(interval);
+  }, [highlightLinks.size]);
 
   // ── Derive ring membership from fraud_rings ──────────────────────────────
   const ringMembershipMap = useMemo(() => {
@@ -106,14 +117,23 @@ function GraphVisualization({ data, fraudResults, riskIntelligence }) {
     
     const fg = graphRef.current;
     
-    // Charge repulsion: -550 to -700 for optimal spread
-    fg.d3Force('charge')?.strength(-600);
+    // Charge repulsion: moderate to prevent overlap but keep clusters close
+    fg.d3Force('charge')?.strength(-300);
     
-    // Link distance: 130-180px
-    fg.d3Force('link')?.distance(150);
+    // Link distance: shorter to keep connected nodes tight
+    fg.d3Force('link')?.distance(80);
     
-    // Weaker center force
-    fg.d3Force('center')?.strength(0.05);
+    // Strong center gravity — pulls ALL nodes (including disconnected clusters)
+    // toward the canvas center so nothing floats away
+    fg.d3Force('center')?.strength(0.1);
+    
+    // Additional X/Y gravity forces — these are crucial for keeping
+    // disconnected components together in one area
+    fg.d3Force('forceX', forceX(0).strength(0.15));
+    fg.d3Force('forceY', forceY(0).strength(0.15));
+    
+    // Collision force: prevent node overlap while keeping them close
+    fg.d3Force('collide', forceCollide().radius(12).strength(0.7));
     
     // Velocity and alpha decay for smooth settling
     fg.d3VelocityDecay?.(0.4);
@@ -398,52 +418,73 @@ function GraphVisualization({ data, fraudResults, riskIntelligence }) {
     const isHovered = hoverLink === link;
     const isDimmed = highlightLinks.size > 0 && !isHighlighted;
 
-    const color = isHighlighted || isHovered ? COLORS.edgeHighlight : link.color;
-    const width = (isHighlighted ? link.width * 1.5 : link.width) / globalScale;
-    const alpha = isDimmed ? 0.05 : isHighlighted ? 0.85 : 0.35;
+    const baseColor = link.isSuspicious ? COLORS.edgeSuspicious : COLORS.edgeDefault;
+    const color = isHighlighted || isHovered ? COLORS.edgeHighlight : baseColor;
+    const width = Math.max(1, (isHighlighted ? link.width * 2 : link.width * 1.2)) / globalScale;
+    const alpha = isDimmed ? 0.08 : isHighlighted ? 1 : 0.5;
 
-    // Calculate curve for parallel edges
+    // Calculate straight line with slight offset for visual clarity
     const dx = end.x - start.x;
     const dy = end.y - start.y;
     const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-    const curve = 0.15;
-    const mx = (start.x + end.x) / 2 + (-dy / dist) * dist * curve * 0.1;
-    const my = (start.y + end.y) / 2 + (dx / dist) * dist * curve * 0.1;
+    
+    // Slight curve only for parallel edges
+    const curve = 0.08;
+    const mx = (start.x + end.x) / 2 + (-dy / dist) * dist * curve;
+    const my = (start.y + end.y) / 2 + (dx / dist) * dist * curve;
 
     ctx.save();
     ctx.globalAlpha = alpha;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    // Draw main edge line
     ctx.strokeStyle = color;
     ctx.lineWidth = width;
-    ctx.lineCap = 'round';
-
-    // Draw curved edge
     ctx.beginPath();
     ctx.moveTo(start.x, start.y);
     ctx.quadraticCurveTo(mx, my, end.x, end.y);
     ctx.stroke();
 
-    // Draw arrowhead
-    const arrowLen = Math.max(4, 6 * link.width) / globalScale;
-    const t = 0.75;
+    // Flowing animation for highlighted edges
+    if (isHighlighted || isHovered) {
+      ctx.strokeStyle = '#FFFFFF';
+      ctx.lineWidth = width * 0.4;
+      ctx.setLineDash([4 / globalScale, 12 / globalScale]);
+      ctx.lineDashOffset = -flowOffset / globalScale;
+      ctx.globalAlpha = 0.8;
+      ctx.beginPath();
+      ctx.moveTo(start.x, start.y);
+      ctx.quadraticCurveTo(mx, my, end.x, end.y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    // Draw clear arrowhead near target
+    const arrowSize = Math.max(6, 10 * link.width) / globalScale;
+    const t = 0.85; // Position arrow closer to target
     const ax = (1-t)*(1-t)*start.x + 2*(1-t)*t*mx + t*t*end.x;
     const ay = (1-t)*(1-t)*start.y + 2*(1-t)*t*my + t*t*end.y;
     const tx = 2*(1-t)*(mx - start.x) + 2*t*(end.x - mx);
     const ty = 2*(1-t)*(my - start.y) + 2*t*(end.y - my);
     const angle = Math.atan2(ty, tx);
 
+    ctx.globalAlpha = isHighlighted ? 1 : alpha;
     ctx.translate(ax, ay);
     ctx.rotate(angle);
+    
+    // Filled triangle arrowhead
     ctx.beginPath();
-    ctx.moveTo(0, 0);
-    ctx.lineTo(-arrowLen, -arrowLen * 0.4);
-    ctx.lineTo(-arrowLen * 0.6, 0);
-    ctx.lineTo(-arrowLen, arrowLen * 0.4);
+    ctx.moveTo(arrowSize * 0.5, 0);
+    ctx.lineTo(-arrowSize * 0.5, -arrowSize * 0.35);
+    ctx.lineTo(-arrowSize * 0.3, 0);
+    ctx.lineTo(-arrowSize * 0.5, arrowSize * 0.35);
     ctx.closePath();
     ctx.fillStyle = color;
     ctx.fill();
 
     ctx.restore();
-  }, [highlightLinks, hoverLink]);
+  }, [highlightLinks, hoverLink, flowOffset]);
 
   // ── Render ────────────────────────────────────────────────────────────────
   const suspiciousCount = graphData.nodes.filter(n => n.isSuspicious).length;

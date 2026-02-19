@@ -26,7 +26,9 @@ class RiskIntelligenceEngine:
     """
     
     def __init__(self, graph: nx.DiGraph, transactions_df: pd.DataFrame, 
-                 fraud_rings: List[Dict], suspicious_accounts: Dict):
+                 fraud_rings: List[Dict], suspicious_accounts: Dict,
+                 cached_cycles: List[List[str]] = None,
+                 whitelisted_accounts: set = None):
         """
         Initialize risk intelligence engine.
         
@@ -35,11 +37,15 @@ class RiskIntelligenceEngine:
             transactions_df: Transaction data
             fraud_rings: Detected fraud rings
             suspicious_accounts: Basic suspicion scores from detection engine
+            cached_cycles: Pre-computed cycles from detection engine (avoids recomputation)
+            whitelisted_accounts: Legitimate merchant/payroll accounts to exclude
         """
         self.graph = graph
         self.df = transactions_df
         self.fraud_rings = fraud_rings
         self.basic_scores = suspicious_accounts
+        self.cached_cycles = cached_cycles or []
+        self.whitelisted_accounts = whitelisted_accounts or set()
         
         # Risk scores storage
         self.risk_scores = {}
@@ -178,11 +184,20 @@ class RiskIntelligenceEngine:
         """
         logger.info("Calculating cycle involvement scores...")
         
-        # Find all cycles
-        try:
-            all_cycles = list(nx.simple_cycles(self.graph))
-        except:
-            all_cycles = []
+        # Reuse cached cycles from detection engine instead of recomputing
+        # This saves the most expensive operation (nx.simple_cycles is O(exponential))
+        all_cycles = self.cached_cycles
+        if not all_cycles:
+            try:
+                import time as _time
+                _start = _time.time()
+                all_cycles = []
+                for cycle in nx.simple_cycles(self.graph):
+                    all_cycles.append(cycle)
+                    if _time.time() - _start > 5.0 or len(all_cycles) >= 500:
+                        break
+            except:
+                all_cycles = []
         
         scores = {node: 0 for node in self.graph.nodes()}
         cycle_counts = defaultdict(int)
@@ -548,6 +563,13 @@ class RiskIntelligenceEngine:
             # Generate customized explanation
             explanation = self.generate_customized_explanation(account, factors, final_score)
             
+            # Zero out whitelisted legitimate accounts (merchants/payroll)
+            if account in self.whitelisted_accounts:
+                final_score = 0.0
+                risk_level = 'LOW'
+                explanation = (f"Account {account} has been identified as a legitimate "
+                              f"high-volume account (e.g. merchant or payroll). No fraud risk.")
+
             results[account] = {
                 'account_id': account,
                 'risk_score': round(final_score, 2),

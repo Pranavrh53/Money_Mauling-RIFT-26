@@ -7,15 +7,9 @@ import pandas as pd
 from typing import Dict, List, Set, Tuple, Any
 from collections import defaultdict, deque
 import logging
-import time
 from datetime import timedelta
 
 logger = logging.getLogger(__name__)
-
-# Maximum seconds allowed for cycle enumeration before early stop
-CYCLE_ENUMERATION_TIMEOUT = 5.0
-# Maximum number of cycles to collect before stopping
-MAX_CYCLES_LIMIT = 500
 
 
 class FraudDetectionEngine:
@@ -50,10 +44,6 @@ class FraudDetectionEngine:
         self.suspicious_accounts = {}
         self.fraud_rings = []
         
-        # Whitelisted legitimate accounts (merchants, payroll)
-        self.whitelisted_accounts: Set[str] = set()
-        self._identify_legitimate_accounts()
-        
     def _precompute_metrics(self):
         """
         Precompute graph metrics to avoid repeated calculations.
@@ -81,58 +71,7 @@ class FraudDetectionEngine:
         self.df_sorted = self.df.sort_values('timestamp').reset_index(drop=True)
         
         logger.info(f"Precomputation complete. {len(self.graph.nodes())} nodes, {len(self.graph.edges())} edges")
-
-    def _identify_legitimate_accounts(self):
-        """
-        Identify and whitelist legitimate high-volume accounts:
-        - Merchants: high fan-in (many payers), very low fan-out, consistent amounts
-        - Payroll: high fan-out (many payees), very low fan-in, regular timing
-        
-        These MUST NOT be flagged as suspicious (hackathon false-positive requirement).
-        """
-        logger.info("Identifying legitimate merchant/payroll accounts...")
-
-        num_nodes = len(self.graph.nodes())
-        # Adaptive threshold: for small datasets use 5, larger ones use 8
-        volume_threshold = max(5, min(8, num_nodes // 10))
-
-        for account in self.graph.nodes():
-            in_deg = self.in_degree.get(account, 0)
-            out_deg = self.out_degree.get(account, 0)
-
-            # --- Merchant heuristic ---
-            # High fan-in (many payers) but very few outgoing connections
-            if in_deg >= volume_threshold and out_deg <= 2:
-                # Confirm with amount consistency: merchants have varied customers
-                received = self.df[self.df['receiver_id'] == account]
-                if len(received) >= volume_threshold:
-                    unique_senders = received['sender_id'].nunique()
-                    # Legitimate merchant: many distinct senders
-                    if unique_senders >= volume_threshold:
-                        self.whitelisted_accounts.add(account)
-                        logger.info(f"Whitelisted MERCHANT: {account} "
-                                    f"(in_deg={in_deg}, unique_senders={unique_senders})")
-                        continue
-
-            # --- Payroll heuristic ---
-            # High fan-out (many payees) but very few incoming connections
-            if out_deg >= volume_threshold and in_deg <= 2:
-                sent = self.df[self.df['sender_id'] == account]
-                if len(sent) >= volume_threshold:
-                    unique_receivers = sent['receiver_id'].nunique()
-                    # Check amount consistency (payroll tends to have similar amounts)
-                    if unique_receivers >= volume_threshold:
-                        amounts = sent['amount'].values
-                        cv = amounts.std() / max(amounts.mean(), 1)  # coefficient of variation
-                        if cv < 0.5:  # relatively consistent amounts
-                            self.whitelisted_accounts.add(account)
-                            logger.info(f"Whitelisted PAYROLL: {account} "
-                                        f"(out_deg={out_deg}, unique_receivers={unique_receivers}, cv={cv:.2f})")
-                            continue
-
-        logger.info(f"Whitelisted {len(self.whitelisted_accounts)} legitimate accounts: "
-                    f"{self.whitelisted_accounts}")
-
+    
     def detect_cycles(self, min_length: int = 3, max_length: int = 5) -> List[List[str]]:
         """
         Detect circular fund routing patterns (cycles).
@@ -155,20 +94,10 @@ class FraudDetectionEngine:
         
         try:
             # NetworkX simple_cycles returns all elementary cycles
-            # Time-limit to prevent exponential blowup on dense graphs (≤30s budget)
+            # We filter by length to focus on relevant patterns
             all_cycles = nx.simple_cycles(self.graph)
-            start_time = time.time()
             
             for cycle in all_cycles:
-                # Enforce time and count limits for ≤30s processing requirement
-                if time.time() - start_time > CYCLE_ENUMERATION_TIMEOUT:
-                    logger.warning(f"Cycle enumeration timeout after {CYCLE_ENUMERATION_TIMEOUT}s, "
-                                   f"collected {len(detected)} cycles so far")
-                    break
-                if len(detected) >= MAX_CYCLES_LIMIT:
-                    logger.warning(f"Cycle limit reached ({MAX_CYCLES_LIMIT}), stopping enumeration")
-                    break
-
                 cycle_length = len(cycle)
                 if min_length <= cycle_length <= max_length:
                     detected.append(cycle)
@@ -181,35 +110,22 @@ class FraudDetectionEngine:
         logger.info(f"Found {len(detected)} cycles")
         return detected
     
-    def detect_smurfing_patterns(self, threshold: int = None, time_window_hours: int = 72) -> Dict[str, List[Dict]]:
+    def detect_smurfing_patterns(self, threshold: int = 10, time_window_hours: int = 72) -> Dict[str, List[Dict]]:
         """
         Detect smurfing patterns (structuring): fan-in and fan-out.
         
         Fan-in: Multiple sources → Single destination (collection)
         Fan-out: Single source → Multiple destinations (distribution)
         
-        Uses adaptive threshold based on dataset size for better recall.
-        Excludes whitelisted merchant/payroll accounts to avoid false positives.
-        
         Complexity: O(n log n) due to sorting, then O(n) for sliding window
         
         Args:
-            threshold: Minimum number of unique counterparties (None = auto)
+            threshold: Minimum number of unique counterparties
             time_window_hours: Time window in hours
             
         Returns:
             Dict with 'fan_in' and 'fan_out' lists
         """
-        # Adaptive threshold: smaller for small datasets to improve recall (≥60%)
-        if threshold is None:
-            num_accounts = len(self.graph.nodes())
-            if num_accounts < 50:
-                threshold = 5
-            elif num_accounts < 200:
-                threshold = 7
-            else:
-                threshold = 10
-
         logger.info(f"Detecting smurfing patterns (threshold={threshold}, window={time_window_hours}h)...")
         
         time_window = timedelta(hours=time_window_hours)
@@ -247,10 +163,6 @@ class FraudDetectionEngine:
                     window_transactions.append(transactions[j])
                 
                 if len(senders_in_window) >= threshold:
-                    # Skip whitelisted merchants (false positive control)
-                    if receiver in self.whitelisted_accounts:
-                        logger.info(f"Skipping fan-in for whitelisted account {receiver}")
-                        break
                     fan_in_patterns.append({
                         'receiver': receiver,
                         'senders': list(senders_in_window),
@@ -291,10 +203,6 @@ class FraudDetectionEngine:
                     window_transactions.append(transactions[j])
                 
                 if len(receivers_in_window) >= threshold:
-                    # Skip whitelisted payroll accounts (false positive control)
-                    if sender in self.whitelisted_accounts:
-                        logger.info(f"Skipping fan-out for whitelisted account {sender}")
-                        break
                     fan_out_patterns.append({
                         'sender': sender,
                         'receivers': list(receivers_in_window),
@@ -491,25 +399,12 @@ class FraudDetectionEngine:
                         rapid_count += 1
                 
                 if rapid_count >= 2:  # At least 2 rapid transactions
-                    # Cap multiplier at 2.0 to prevent score inflation (precision ≥70%)
-                    multiplier = min(1 + (rapid_count * 0.1), 2.0)
+                    multiplier = 1 + (rapid_count * 0.1)  # 10% per rapid transaction
                     scores[account]['score'] *= multiplier
                     scores[account]['factors'].append(f'velocity_x{multiplier:.1f}')
         
-        # 6. Whitelisted account protection (MUST NOT flag merchants/payroll)
-        for account in self.whitelisted_accounts:
-            if account in scores:
-                scores[account]['score'] = 0
-                scores[account]['factors'] = ['whitelisted_legitimate_account']
-                scores[account]['patterns'] = []
-                scores[account]['risk_level'] = 'LOW'
-                logger.info(f"Zeroed score for whitelisted account {account}")
-
-        # 7. Penalty for legitimate patterns
+        # 6. Penalty for legitimate patterns
         for account in self.graph.nodes():
-            if account in self.whitelisted_accounts:
-                continue
-
             account_txns = self.df_sorted[
                 (self.df_sorted['sender_id'] == account) | 
                 (self.df_sorted['receiver_id'] == account)
@@ -654,9 +549,9 @@ class FraudDetectionEngine:
         """
         logger.info("=== Starting Full Fraud Detection Pipeline ===")
         
-        # 1. Detect patterns (adaptive thresholds for recall ≥60%)
+        # 1. Detect patterns
         self.detect_cycles(min_length=3, max_length=5)
-        self.detect_smurfing_patterns(threshold=None, time_window_hours=72)  # adaptive
+        self.detect_smurfing_patterns(threshold=10, time_window_hours=72)
         self.detect_shell_chains(min_length=3, max_degree=3)
         
         # 2. Calculate scores

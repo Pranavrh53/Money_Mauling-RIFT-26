@@ -204,6 +204,21 @@
   font-weight: 500;
 }
 
+/* Member Accounts Cell */
+.member-accounts-cell {
+  font-size: 0.85rem;
+  color: rgba(255, 255, 255, 0.85);
+  max-width: 400px;
+  line-height: 1.5;
+  word-wrap: break-word;
+  font-family: 'Monaco', 'Menlo', monospace;
+}
+
+.col-accounts {
+  min-width: 200px;
+  max-width: 400px;
+}
+
 /* Risk Badge */
 .risk-badge {
   display: inline-flex;

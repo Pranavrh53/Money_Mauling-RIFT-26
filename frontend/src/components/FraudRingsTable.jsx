@@ -1,9 +1,7 @@
-import React, { useState } from 'react';
+import React from 'react';
 import './FraudRingsTable.css';
 
 function FraudRingsTable({ rings }) {
-  const [expandedRing, setExpandedRing] = useState(null);
-
   if (!rings || rings.length === 0) {
     return (
       <div className="no-rings-message">
@@ -40,10 +38,6 @@ function FraudRingsTable({ rings }) {
     return { level: 'MEDIUM', class: 'risk-medium' };
   };
 
-  const toggleExpand = (ringId) => {
-    setExpandedRing(expandedRing === ringId ? null : ringId);
-  };
-
   return (
     <div className="fraud-rings-section">
       <div className="section-header-fancy">
@@ -74,7 +68,7 @@ function FraudRingsTable({ rings }) {
               <tr>
                 <th className="col-ring-id">Ring ID</th>
                 <th className="col-pattern">Pattern Type</th>
-                <th className="col-members">Members</th>
+                <th className="col-members">Member Count</th>
                 <th className="col-risk">Risk Score</th>
                 <th className="col-member-accounts">Member Account IDs</th>
                 <th className="col-expand"></th>
@@ -82,15 +76,11 @@ function FraudRingsTable({ rings }) {
             </thead>
             <tbody>
               {rings.map((ring) => {
-                const isExpanded = expandedRing === ring.ring_id;
                 const risk = getRiskLevel(ring.risk_score);
+                const memberAccountsStr = ring.member_accounts.join(', ');
                 
                 return (
-                  <React.Fragment key={ring.ring_id}>
-                    <tr 
-                      className={`ring-row ${isExpanded ? 'expanded' : ''}`}
-                      onClick={() => toggleExpand(ring.ring_id)}
-                    >
+                    <tr key={ring.ring_id} className="ring-row">
                       <td className="col-ring-id">
                         <div className="ring-id-cell">
                           <span className="ring-id-badge">{ring.ring_id}</span>
@@ -118,49 +108,11 @@ function FraudRingsTable({ rings }) {
                       </td>
                       <td className="col-member-accounts">
                         <div className="member-accounts-cell">
-                          {ring.member_accounts.join(', ')}
+                          {memberAccountsStr}
                         </div>
                       </td>
-                      <td className="col-expand">
-                        <button className="expand-btn">
-                          <svg 
-                            width="20" 
-                            height="20" 
-                            viewBox="0 0 24 24" 
-                            fill="none"
-                            className={`expand-icon ${isExpanded ? 'rotated' : ''}`}
-                          >
-                            <path 
-                              d="M6 9L12 15L18 9" 
-                              stroke="currentColor" 
-                              strokeWidth="2" 
-                              strokeLinecap="round" 
-                              strokeLinejoin="round"
-                            />
-                          </svg>
-                        </button>
-                      </td>
+                      <td className="col-expand"></td>
                     </tr>
-                    {isExpanded && (
-                      <tr className="expanded-content-row">
-                        <td colSpan="6">
-                          <div className="expanded-content">
-                            <div className="members-grid">
-                              <div className="grid-header">Member Accounts</div>
-                              <div className="members-list-expanded">
-                                {ring.member_accounts.map((account, idx) => (
-                                  <div key={idx} className="member-chip">
-                                    <span className="chip-icon">🔗</span>
-                                    <span className="chip-text">{account}</span>
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          </div>
-                        </td>
-                      </tr>
-                    )}
-                  </React.Fragment>
                 );
               })}
             </tbody>
