@@ -1,905 +1,1350 @@
-import React, { useRef, useEffect, useState, useMemo, useCallback } from 'react';
+import React, { useRef, useEffect, useState, useMemo } from 'react';
 import ForceGraph2D from 'react-force-graph-2d';
-import { forceX, forceY, forceCollide } from 'd3-force';
 import './GraphVisualization.css';
-
-// ════════════════════════════════════════════════════════════════════════════
-// PROFESSIONAL FINANCIAL NETWORK GRAPH VISUALIZATION
-// Clean, analytical dashboard for fraud detection
-// ════════════════════════════════════════════════════════════════════════════
-
-// Color palette - professional dark theme
-const COLORS = {
-  bg: '#0F172A',
-  nodeLow: '#3B82F6',      // Blue - normal/low risk
-  nodeMedium: '#F59E0B',   // Orange - medium risk
-  nodeHigh: '#EF4444',     // Red - high risk
-  nodeStroke: '#1E293B',
-  nodeStrokeHover: '#60A5FA',
-  edgeDefault: '#94A3B8',  // Lighter gray for better visibility
-  edgeSuspicious: '#DC2626',
-  edgeHighlight: '#60A5FA',
-  text: '#E2E8F0',
-  textMuted: '#94A3B8',
-  panelBg: '#1E293B',
-  panelBorder: '#334155',
-  // Pattern-specific highlight colors
-  patternCycle: '#A855F7',      // Purple - Circular Fund Routing
-  patternSmurfing: '#06B6D4',   // Cyan - Smurfing (Fan-in/Fan-out)
-  patternShell: '#F97316',      // Orange - Shell Networks
-};
 
 function GraphVisualization({ data, fraudResults, riskIntelligence }) {
   const graphRef = useRef();
-  const containerRef = useRef();
-
-  // State
   const [selectedNode, setSelectedNode] = useState(null);
+  const [selectedRing, setSelectedRing] = useState(null); // New: for fraud ring investigation
   const [highlightNodes, setHighlightNodes] = useState(new Set());
   const [highlightLinks, setHighlightLinks] = useState(new Set());
   const [hoverNode, setHoverNode] = useState(null);
-  const [hoverLink, setHoverLink] = useState(null);
-  const [neighborDepth, setNeighborDepth] = useState(1);
-  const [showLowWeight, setShowLowWeight] = useState(true);
-  const [showOnlySuspicious, setShowOnlySuspicious] = useState(false);
-  const [minAmount, setMinAmount] = useState(0);
-  const [dimensions, setDimensions] = useState({ width: 900, height: 700 });
-  const [flowOffset, setFlowOffset] = useState(0);
-  const [activePattern, setActivePattern] = useState(null); // null | 'cycle' | 'smurfing' | 'shell_chain'
+  const [neighborDepth, setNeighborDepth] = useState(1); // 1-hop or 2-hop neighbors
+  const [clusterByRing, setClusterByRing] = useState(false);
+  const [heatmapMode, setHeatmapMode] = useState(false);
+  const [showFlowAnimation, setShowFlowAnimation] = useState(false);
+  const [animationFrame, setAnimationFrame] = useState(0);
 
-  // ── Animate flow on highlighted links ─────────────────────────────────────
-  useEffect(() => {
-    if (highlightLinks.size === 0 && !activePattern) return;
-    const interval = setInterval(() => {
-      setFlowOffset(prev => (prev + 1) % 30);
-    }, 50);
-    return () => clearInterval(interval);
-  }, [highlightLinks.size, activePattern]);
+  // Memoize suspicious accounts map for performance
+  const suspiciousAccountsMap = useMemo(() => {
+    if (!fraudResults || !fraudResults.suspicious_accounts) return new Map();
 
-  // ── Derive ring membership from fraud_rings ──────────────────────────────
-  const ringMembershipMap = useMemo(() => {
     const map = new Map();
-    fraudResults?.fraud_rings?.forEach(ring => {
-      ring.member_accounts?.forEach(accId => {
-        map.set(accId, ring.ring_id);
+    fraudResults.suspicious_accounts.forEach(acc => {
+      map.set(acc.account_id, {
+        suspicion_score: acc.suspicion_score,
+        ring_id: acc.ring_id,
+        detected_patterns: acc.detected_patterns
       });
     });
     return map;
   }, [fraudResults]);
 
-  // ── Derived data maps ─────────────────────────────────────────────────────
-  const suspiciousMap = useMemo(() => {
-    const map = new Map();
-    fraudResults?.suspicious_accounts?.forEach(acc => {
-      map.set(acc.account_id, {
-        score: acc.score,
-        ringId: ringMembershipMap.get(acc.account_id) || null,
-        patterns: acc.patterns || []
-      });
-    });
-    return map;
-  }, [fraudResults, ringMembershipMap]);
+  // Memoize risk intelligence map for enhanced scoring
+  const riskIntelligenceMap = useMemo(() => {
+    if (!riskIntelligence || !riskIntelligence.risk_scores) return new Map();
 
-  const riskMap = useMemo(() => {
     const map = new Map();
-    riskIntelligence?.risk_scores?.forEach(acc => {
+    riskIntelligence.risk_scores.forEach(acc => {
       map.set(acc.account_id, acc);
     });
     return map;
   }, [riskIntelligence]);
 
-  // ── Pattern-specific node sets for highlight buttons ────────────────────
-  const patternNodeSets = useMemo(() => {
-    const sets = { cycle: new Set(), smurfing: new Set(), shell_chain: new Set() };
-    fraudResults?.fraud_rings?.forEach(ring => {
-      const members = ring.member_accounts || [];
-      if (ring.pattern_type === 'cycle') {
-        members.forEach(id => sets.cycle.add(id));
-      } else if (ring.pattern_type === 'fan_in' || ring.pattern_type === 'fan_out') {
-        members.forEach(id => sets.smurfing.add(id));
-      } else if (ring.pattern_type === 'shell_chain') {
-        members.forEach(id => sets.shell_chain.add(id));
-      }
+  // Assign unique colors to fraud rings
+  const ringColors = useMemo(() => {
+    if (!fraudResults || !fraudResults.fraud_rings) return {};
+
+    const colors = [
+      '#ef4444', // red
+      '#f97316', // orange
+      '#f59e0b', // amber
+      '#84cc16', // lime
+      '#10b981', // emerald
+      '#06b6d4', // cyan
+      '#3b82f6', // blue
+      '#8b5cf6', // violet
+      '#ec4899', // pink
+      '#f43f5e', // rose
+    ];
+
+    const ringColorMap = {};
+    fraudResults.fraud_rings.forEach((ring, idx) => {
+      ringColorMap[ring.ring_id] = colors[idx % colors.length];
     });
-    return sets;
+    return ringColorMap;
   }, [fraudResults]);
 
-  // ── Pattern-specific link sets ─────────────────────────────────────────
-  const patternLinkSets = useMemo(() => {
-    if (!activePattern || !data?.edges) return new Set();
-    const nodeSet = patternNodeSets[activePattern];
-    if (!nodeSet || nodeSet.size === 0) return new Set();
-    // A link belongs to the pattern if both source and target are pattern members
-    const linkKeys = new Set();
-    data.edges.forEach(e => {
-      const src = e.source?.id || e.source;
-      const tgt = e.target?.id || e.target;
-      if (nodeSet.has(src) && nodeSet.has(tgt)) {
-        linkKeys.add(`${src}->${tgt}`);
-      }
+  // ─── ADAPTIVE LAYOUT ANALYSIS ──────────────────────────────────────────────
+  //
+  // Classifies the graph into one of three layout modes:
+  //   ISOLATED_RINGS             – 1 ring, few cross-ring edges
+  //   MULTIPLE_DISCONNECTED_RINGS – many rings, rings not bridged to each other
+  //   INTERCONNECTED_MIXED       – rings share edges or touch legitimate accounts
+  //
+  const layoutAnalysis = useMemo(() => {
+    const rings = fraudResults?.fraud_rings ?? [];
+    const ringCount = rings.length;
+    const suspiciousCount = fraudResults?.suspicious_accounts?.length ?? 0;
+
+    if (ringCount === 0 || !data?.edges) {
+      return { mode: 'INTERCONNECTED_MIXED', ringCount: 0, suspiciousCount };
+    }
+
+    // Build a quick lookup: accountId → ringIndex
+    const accountRing = new Map();
+    rings.forEach((ring, idx) => {
+      ring.member_accounts.forEach(acc => accountRing.set(acc, idx));
     });
-    return linkKeys;
-  }, [activePattern, patternNodeSets, data]);
 
-  // Helper: get the highlight color for the active pattern
-  const getPatternColor = useCallback((pattern) => {
-    if (pattern === 'cycle') return COLORS.patternCycle;
-    if (pattern === 'smurfing') return COLORS.patternSmurfing;
-    if (pattern === 'shell_chain') return COLORS.patternShell;
-    return COLORS.edgeHighlight;
-  }, []);
+    let crossRingEdges = 0;
+    let ringToLegitEdges = 0;
 
-  // ── Window resize handling ────────────────────────────────────────────────
+    data.edges.forEach(edge => {
+      const sr = accountRing.get(edge.source) ?? -1;
+      const tr = accountRing.get(edge.target) ?? -1;
+      if (sr !== -1 && tr !== -1 && sr !== tr) crossRingEdges++;
+      else if ((sr !== -1) !== (tr !== -1)) ringToLegitEdges++;
+    });
+
+    let mode;
+    if (ringCount === 1 && crossRingEdges === 0 && ringToLegitEdges < 4) {
+      mode = 'ISOLATED_RINGS';
+    } else if (crossRingEdges === 0 && ringToLegitEdges < 6) {
+      mode = 'MULTIPLE_DISCONNECTED_RINGS';
+    } else {
+      mode = 'INTERCONNECTED_MIXED';
+    }
+
+    console.log(`[AdaptiveLayout] mode=${mode} rings=${ringCount} crossRing=${crossRingEdges} legitEdges=${ringToLegitEdges} suspicious=${suspiciousCount}`);
+    return { mode, ringCount, suspiciousCount, crossRingEdges, ringToLegitEdges };
+  }, [fraudResults, data]);
+
+  // Physics parameters per layout mode
+  const physicsSettings = useMemo(() => {
+    switch (layoutAnalysis.mode) {
+      case 'ISOLATED_RINGS':
+        return { repulsion: -600, linkDistance: 70, collision: 14, alphaDecay: 0.012, velocityDecay: 0.3, warmup: 100, cooldown: 250 };
+      case 'MULTIPLE_DISCONNECTED_RINGS':
+        return { repulsion: -800, linkDistance: 90, collision: 18, alphaDecay: 0.009, velocityDecay: 0.25, warmup: 130, cooldown: 300 };
+      case 'INTERCONNECTED_MIXED':
+      default:
+        return { repulsion: -1100, linkDistance: 130, collision: 26, alphaDecay: 0.007, velocityDecay: 0.22, warmup: 180, cooldown: 350 };
+    }
+  }, [layoutAnalysis.mode]);
+
+  // Animation loop for flow effects
   useEffect(() => {
-    const updateDimensions = () => {
-      if (containerRef.current) {
-        const rect = containerRef.current.getBoundingClientRect();
-        setDimensions({
-          width: Math.max(600, rect.width - 360), // Leave room for panel
-          height: Math.max(500, window.innerHeight - 250)
-        });
-      }
-    };
-    updateDimensions();
-    window.addEventListener('resize', updateDimensions);
-    return () => window.removeEventListener('resize', updateDimensions);
-  }, []);
+    if (!showFlowAnimation) return;
 
-  // ── Auto-fit on data load ─────────────────────────────────────────────────
+    const interval = setInterval(() => {
+      setAnimationFrame(prev => (prev + 1) % 100);
+    }, 50);
+
+    return () => clearInterval(interval);
+  }, [showFlowAnimation]);
+
+  // Reheat simulation and refit whenever layout mode or data changes
   useEffect(() => {
-    if (data?.nodes?.length > 0) {
-      const timer = setTimeout(() => {
-        try {
-          graphRef.current?.zoomToFit(600, 60);
-        } catch (e) { /* ignore */ }
-      }, 1000);
-      return () => clearTimeout(timer);
+    if (!graphRef.current) return;
+    try {
+      graphRef.current.d3ReheatSimulation();
+      setTimeout(() => {
+        if (graphRef.current?.zoomToFit) graphRef.current.zoomToFit(800, 60);
+      }, (physicsSettings.warmup / (physicsSettings.alphaDecay * 60)) * 16 + 600);
+    } catch (err) {
+      console.warn('[AdaptiveLayout] reheat failed:', err);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layoutAnalysis.mode, data]);
+
+  useEffect(() => {
+    console.log('GraphVisualization received data:', data);
+
+    // Center graph on load with smooth animation
+    if (data && data.nodes && data.nodes.length > 0) {
+      setTimeout(() => {
+        if (graphRef.current && graphRef.current.zoomToFit) {
+          try {
+            graphRef.current.zoomToFit(600, 80);
+          } catch (err) {
+            console.warn('Failed to zoom to fit:', err);
+          }
+        }
+      }, 1500);
     }
   }, [data]);
 
-  // ── Configure D3 forces for proper spacing ────────────────────────────────
-  useEffect(() => {
-    if (!graphRef.current || !data?.nodes?.length) return;
-    
-    const fg = graphRef.current;
-    
-    // Charge repulsion: moderate to prevent overlap but keep clusters close
-    fg.d3Force('charge')?.strength(-300);
-    
-    // Link distance: shorter to keep connected nodes tight
-    fg.d3Force('link')?.distance(80);
-    
-    // Strong center gravity — pulls ALL nodes (including disconnected clusters)
-    // toward the canvas center so nothing floats away
-    fg.d3Force('center')?.strength(0.1);
-    
-    // Additional X/Y gravity forces — these are crucial for keeping
-    // disconnected components together in one area
-    fg.d3Force('forceX', forceX(0).strength(0.15));
-    fg.d3Force('forceY', forceY(0).strength(0.15));
-    
-    // Collision force: prevent node overlap while keeping them close
-    fg.d3Force('collide', forceCollide().radius(12).strength(0.7));
-    
-    // Velocity and alpha decay for smooth settling
-    fg.d3VelocityDecay?.(0.4);
-    fg.d3AlphaDecay?.(0.02);
-    
-    // Reheat to apply forces
-    fg.d3ReheatSimulation?.();
-  }, [data]);
-
-  // ── Empty states ──────────────────────────────────────────────────────────
   if (!data) {
+    console.log('No data provided to GraphVisualization');
     return (
-      <div className="gv-container gv-empty">
-        <div className="gv-empty-icon">📊</div>
-        <p>Upload a CSV file to visualize the transaction network</p>
+      <div className="graph-container">
+        <div className="no-data">
+          <p>⏳ Waiting for data... Please upload a CSV file first.</p>
+        </div>
       </div>
     );
   }
 
-  if (!data.nodes?.length) {
+  if (!data.nodes || data.nodes.length === 0) {
+    console.log('Data exists but no nodes found:', data);
     return (
-      <div className="gv-container gv-empty">
-        <div className="gv-empty-icon">⚠️</div>
-        <p>No transaction data available</p>
+      <div className="graph-container">
+        <div className="no-data">
+          <p>❌ No transaction data to visualize</p>
+        </div>
       </div>
     );
   }
 
-  // ── Calculate graph statistics ────────────────────────────────────────────
-  const stats = useMemo(() => {
-    const maxVolume = Math.max(...data.nodes.map(n => 
-      (n.total_amount_sent || 0) + (n.total_amount_received || 0)
-    ), 1);
-    const maxDegree = Math.max(...data.nodes.map(n => 
-      (n.in_degree || 0) + (n.out_degree || 0)
-    ), 1);
-    const maxEdgeAmount = Math.max(...data.edges.map(e => e.amount || 0), 1);
-    return { maxVolume, maxDegree, maxEdgeAmount };
-  }, [data]);
+  console.log(`Rendering graph with ${data.nodes.length} nodes and ${data.edges.length} edges`);
 
-  // ── Build graph data ──────────────────────────────────────────────────────
+  // NODE SIZES — shrink proportionally when many suspicious nodes to avoid clutter
+  const maxTransactions = Math.max(...data.nodes.map(n => n.total_transactions), 1);
+  const minSize = 7;
+  const maxSize = layoutAnalysis.suspiciousCount > 10 ? 20 : 28;
+
+  // Format graph data with fraud detection integration
   const graphData = useMemo(() => {
-    // Filter nodes
-    let filteredNodes = data.nodes;
-    if (showOnlySuspicious) {
-      filteredNodes = filteredNodes.filter(n => suspiciousMap.has(n.id));
-    }
+    return {
+      nodes: data.nodes.map(node => {
+        const suspiciousData = suspiciousAccountsMap.get(node.id);
+        const isSuspicious = !!suspiciousData;
+        const ringId = suspiciousData?.ring_id;
+        const suspicionScore = suspiciousData?.suspicion_score || 0;
 
-    const nodeIds = new Set(filteredNodes.map(n => n.id));
+        // Node size based on transaction volume
+        const sizeRatio = node.total_transactions / maxTransactions;
+        const nodeSize = minSize + (sizeRatio * (maxSize - minSize));
 
-    // Process nodes
-    const nodes = filteredNodes.map(node => {
-      const susp = suspiciousMap.get(node.id);
-      const risk = riskMap.get(node.id);
-      const score = susp?.score || risk?.risk_score || 0;
-      
-      // Size: suspicious/ring nodes are larger for distinction
-      const degree = (node.in_degree || 0) + (node.out_degree || 0);
-      let size = 8 + Math.sqrt(degree) * 2;
-      const isInRing = !!susp?.ringId;
-      if (isInRing) size = Math.max(size, 14);  // Ring members are bigger
-      else if (susp) size = Math.max(size, 12); // Suspicious nodes slightly bigger
+        // Node color: suspicious = red/orange gradient, normal = blue
+        let nodeColor;
+        if (heatmapMode && isSuspicious) {
+          // Heatmap mode: pure gradient based on suspicion score
+          const intensity = Math.min(suspicionScore / 100, 1);
+          const hue = (1 - intensity) * 60; // 60 = yellow, 0 = red
+          nodeColor = `hsl(${hue}, 100%, 50%)`;
+        } else if (isSuspicious) {
+          // Normal mode: orange to red gradient
+          const intensity = Math.min(suspicionScore / 100, 1);
+          const red = Math.floor(239 + (220 - 239) * intensity);
+          const green = Math.floor(68 + (38 - 68) * intensity);
+          const blue = Math.floor(68 + (38 - 68) * intensity);
+          nodeColor = `rgb(${red}, ${green}, ${blue})`;
+        } else {
+          nodeColor = '#58a6ff'; // Soft blue for normal
+        }
 
-      // Color based on risk level
-      let color = COLORS.nodeLow;
-      if (score >= 70) color = COLORS.nodeHigh;
-      else if (score >= 40) color = COLORS.nodeMedium;
+        return {
+          ...node,
+          size: nodeSize,
+          color: nodeColor,
+          isSuspicious,
+          ringId,
+          ringColor: ringId ? ringColors[ringId] : null,
+          suspicionScore,
+          detectedPatterns: suspiciousData?.detected_patterns || []
+        };
+      }),
+      links: data.edges.map(edge => {
+        // Check if both source and target are in same ring
+        const sourceSusp = suspiciousAccountsMap.get(edge.source);
+        const targetSusp = suspiciousAccountsMap.get(edge.target);
+        const sameRing = sourceSusp?.ring_id && targetSusp?.ring_id &&
+          sourceSusp.ring_id === targetSusp.ring_id;
 
-      return {
-        ...node,
-        size,
-        color,
-        score,
-        isSuspicious: !!susp,
-        isInRing,
-        ringId: susp?.ringId,
-        patterns: susp?.patterns || [],
-        riskLevel: risk?.risk_level || (score >= 70 ? 'HIGH' : score >= 40 ? 'MEDIUM' : 'LOW')
-      };
-    });
+        return {
+          source: edge.source,
+          target: edge.target,
+          value: edge.amount,
+          label: edge.transaction_count,
+          sameRing,
+          ringColor: sameRing ? ringColors[sourceSusp.ring_id] : null
+        };
+      }),
+    };
+  }, [data, suspiciousAccountsMap, ringColors, maxTransactions, heatmapMode]);
 
-    // Filter and process edges
-    let filteredEdges = data.edges.filter(e => 
-      nodeIds.has(e.source) && nodeIds.has(e.target)
-    );
-    
-    if (!showLowWeight) {
-      const threshold = stats.maxEdgeAmount * 0.1;
-      filteredEdges = filteredEdges.filter(e => e.amount >= threshold);
-    }
-    
-    if (minAmount > 0) {
-      filteredEdges = filteredEdges.filter(e => e.amount >= minAmount);
-    }
+  console.log('Formatted graph data:', {
+    nodesCount: graphData.nodes.length,
+    linksCount: graphData.links.length,
+    suspiciousCount: graphData.nodes.filter(n => n.isSuspicious).length
+  });
 
-    const links = filteredEdges.map(edge => {
-      const sourceNode = nodes.find(n => n.id === edge.source);
-      const targetNode = nodes.find(n => n.id === edge.target);
-      const isSuspicious = sourceNode?.isSuspicious || targetNode?.isSuspicious;
-      
-      // Edge width: thin lines (0.5-2px)
-      const width = 0.5 + (edge.amount / stats.maxEdgeAmount) * 1.5;
-
-      return {
-        source: edge.source,
-        target: edge.target,
-        amount: edge.amount,
-        txCount: edge.transaction_count || 1,
-        width,
-        isSuspicious,
-        color: isSuspicious ? COLORS.edgeSuspicious : COLORS.edgeDefault
-      };
-    });
-
-    return { nodes, links };
-  }, [data, suspiciousMap, riskMap, stats, showOnlySuspicious, showLowWeight, minAmount]);
-
-  // ── Node click: isolate ego network ───────────────────────────────────────
-  const handleNodeClick = useCallback((node) => {
-    if (selectedNode?.id === node.id) {
-      // Double-click behavior: clear selection
-      setSelectedNode(null);
-      setHighlightNodes(new Set());
-      setHighlightLinks(new Set());
-      graphRef.current?.zoomToFit(500, 60);
+  // Apply clustering forces when cluster mode is enabled
+  useEffect(() => {
+    if (!graphRef.current || !graphData || !graphData.nodes || graphData.nodes.length === 0) {
       return;
     }
 
-    setSelectedNode(node);
-    
-    // Find neighbors
-    const neighbors = new Set([node.id]);
-    const linkedEdges = new Set();
-    const hop1 = new Set();
+    console.log('Cluster mode changed:', clusterByRing);
 
-    graphData.links.forEach(link => {
-      const sid = link.source?.id || link.source;
-      const tid = link.target?.id || link.target;
-      if (sid === node.id) {
-        hop1.add(tid);
-        neighbors.add(tid);
-        linkedEdges.add(link);
+    if (clusterByRing && fraudResults && fraudResults.fraud_rings && fraudResults.fraud_rings.length > 0) {
+      // Create ring-based attraction links
+      const ringLinks = [];
+      const nodesByRing = {};
+
+      // Group nodes by ring
+      graphData.nodes.forEach(node => {
+        if (node.ringId) {
+          if (!nodesByRing[node.ringId]) {
+            nodesByRing[node.ringId] = [];
+          }
+          nodesByRing[node.ringId].push(node);
+        }
+      });
+
+      // Create attractive links between nodes in same ring
+      // Only create links if we have nodes grouped by ring
+      if (Object.keys(nodesByRing).length > 0) {
+        Object.values(nodesByRing).forEach(ringNodes => {
+          for (let i = 0; i < ringNodes.length; i++) {
+            for (let j = i + 1; j < ringNodes.length; j++) {
+              ringLinks.push({
+                source: ringNodes[i].id,
+                target: ringNodes[j].id,
+                strength: 0.3
+              });
+            }
+          }
+        });
       }
-      if (tid === node.id) {
-        hop1.add(sid);
-        neighbors.add(sid);
-        linkedEdges.add(link);
+
+      console.log('Created ring links for clustering:', ringLinks.length);
+
+      // Apply custom force for clustering only if we have ring links
+      if (ringLinks.length > 0) {
+        try {
+          const forceLink = graphRef.current.d3Force('link');
+          if (forceLink) {
+            // Don't add ring links to the actual graph data, just use them for force simulation
+            // This prevents "node not found" errors
+            graphRef.current.d3ReheatSimulation();
+          }
+        } catch (err) {
+          console.warn('Failed to apply clustering forces:', err);
+        }
+      }
+    } else {
+      // Reset to normal simulation
+      try {
+        if (graphRef.current.d3ReheatSimulation) {
+          graphRef.current.d3ReheatSimulation();
+        }
+      } catch (err) {
+        console.warn('Failed to reset clustering:', err);
+      }
+    }
+  }, [clusterByRing, fraudResults, graphData]);
+
+  // Force canvas redraw when heatmap or animation modes change
+  useEffect(() => {
+    if (graphRef.current && graphRef.current.zoom) {
+      try {
+        // Trigger a redraw by nudging the camera slightly
+        const currentZoom = graphRef.current.zoom();
+        graphRef.current.zoom(currentZoom);
+      } catch (err) {
+        console.warn('Failed to redraw canvas:', err);
+      }
+    }
+  }, [heatmapMode, showFlowAnimation]);
+
+  const handleNodeClick = (node) => {
+    setSelectedNode(node);
+    setHoverNode(null); // Clear hover tooltip when selecting a node
+
+    // Zoom in and center on the clicked node
+    if (graphRef.current) {
+      const distance = 200;
+      graphRef.current.centerAt(node.x, node.y, 1000); // Center on node with 1s animation
+      graphRef.current.zoom(3, 1000); // Zoom to 3x with 1s animation
+    }
+
+    // Highlight connected nodes and links with depth support
+    const neighbors = new Set();
+    const links = new Set();
+    const depth1 = new Set();
+    const depth2 = new Set();
+
+    // Find 1-hop neighbors
+    graphData.links.forEach(link => {
+      if (link.source.id === node.id || link.source === node.id) {
+        const targetId = link.target.id || link.target;
+        depth1.add(targetId);
+        links.add(link);
+      }
+      if (link.target.id === node.id || link.target === node.id) {
+        const sourceId = link.source.id || link.source;
+        depth1.add(sourceId);
+        links.add(link);
       }
     });
 
-    // 2-hop neighbors if enabled
+    // Find 2-hop neighbors if enabled
     if (neighborDepth === 2) {
-      graphData.links.forEach(link => {
-        const sid = link.source?.id || link.source;
-        const tid = link.target?.id || link.target;
-        if (hop1.has(sid) || hop1.has(tid)) {
-          neighbors.add(sid);
-          neighbors.add(tid);
-          linkedEdges.add(link);
-        }
+      depth1.forEach(nodeId => {
+        graphData.links.forEach(link => {
+          if (link.source.id === nodeId || link.source === nodeId) {
+            const targetId = link.target.id || link.target;
+            if (targetId !== node.id) {
+              depth2.add(targetId);
+            }
+          }
+          if (link.target.id === nodeId || link.target === nodeId) {
+            const sourceId = link.source.id || link.source;
+            if (sourceId !== node.id) {
+              depth2.add(sourceId);
+            }
+          }
+        });
       });
     }
+
+    // Combine all neighbors
+    neighbors.add(node.id);
+    depth1.forEach(id => neighbors.add(id));
+    depth2.forEach(id => neighbors.add(id));
 
     setHighlightNodes(neighbors);
-    setHighlightLinks(linkedEdges);
+    setHighlightLinks(links);
+  };
 
-    // Zoom to node
-    graphRef.current?.centerAt(node.x, node.y, 500);
-    graphRef.current?.zoom(2.5, 500);
-  }, [selectedNode, graphData, neighborDepth]);
+  const handleNodeHover = (node) => {
+    setHoverNode(node);
+  };
 
-  // ── Background click: reset ───────────────────────────────────────────────
-  const handleBackgroundClick = useCallback(() => {
+  // Calculate smart tooltip position that stays within viewport
+  const getTooltipPosition = (node) => {
+    if (!node) return { left: 0, top: 0, transform: 'translate(-50%, -100%)' };
+
+    // Get actual canvas dimensions from the graph ref
+    let graphWidth = 800;  // fallback
+    let graphHeight = 900; // fallback
+
+    if (graphRef.current) {
+      try {
+        const canvas = graphRef.current.renderer().domElement;
+        if (canvas) {
+          graphWidth = canvas.width;
+          graphHeight = canvas.height;
+        }
+      } catch (err) {
+        // Use fallback dimensions
+      }
+    }
+
+    const tooltipWidth = 300;  // Approximate tooltip width
+    const tooltipHeight = 180; // Approximate tooltip height
+    const padding = 30;        // Padding from edges
+    const offsetY = 60;        // Distance from node
+
+    // Start with centered position above the node
+    let left = node.x;
+    let top = node.y - offsetY;
+    let transform = 'translate(-50%, -100%)';
+
+    // Adjust horizontal position if going off edges
+    if (node.x + tooltipWidth / 2 > graphWidth - padding) {
+      // Too far right - align to right edge of tooltip
+      transform = 'translate(-100%, -100%)';
+      left = node.x - 15;
+    } else if (node.x - tooltipWidth / 2 < padding) {
+      // Too far left - align to left edge of tooltip
+      transform = 'translate(0%, -100%)';
+      left = node.x + 15;
+    }
+
+    // Adjust vertical position if going off edges
+    if (node.y - tooltipHeight - offsetY < padding) {
+      // Too close to top - show below node instead
+      top = node.y + offsetY;
+      transform = transform.replace('-100%', '0%');
+    } else if (node.y + tooltipHeight > graphHeight - padding) {
+      // Too close to bottom - force above
+      top = node.y - offsetY;
+      transform = transform.replace('0%', '-100%');
+    }
+
+    return { left, top, transform };
+  };
+
+  const handleBackgroundClick = () => {
     setSelectedNode(null);
-    setHoverNode(null);
-    setHoverLink(null);
+    setSelectedRing(null); // Also clear ring selection
+    setHoverNode(null); // Clear hover tooltip as well
     setHighlightNodes(new Set());
     setHighlightLinks(new Set());
-    graphRef.current?.zoomToFit(500, 60);
-  }, []);
 
-  // ── Node hover ────────────────────────────────────────────────────────────
-  const handleNodeHover = useCallback((node) => {
-    setHoverNode(node);
-    if (node && !selectedNode) {
-      // Highlight connected edges on hover
-      const linked = new Set();
-      graphData.links.forEach(link => {
-        const sid = link.source?.id || link.source;
-        const tid = link.target?.id || link.target;
-        if (sid === node.id || tid === node.id) {
-          linked.add(link);
+    // Zoom out and fit all nodes when deselecting
+    if (graphRef.current) {
+      graphRef.current.zoomToFit(1000, 80); // Fit all nodes with 1s animation
+    }
+  };
+
+  // Handle fraud ring selection
+  const handleRingSelect = (ring) => {
+    setSelectedRing(ring);
+    setSelectedNode(null); // Clear node selection when selecting ring
+    setHoverNode(null);
+
+    // Highlight all nodes in the ring
+    const ringNodes = new Set(ring.member_accounts);
+    setHighlightNodes(ringNodes);
+
+    // Highlight all edges between ring members
+    const ringLinks = new Set();
+    graphData.links.forEach(link => {
+      const sourceId = link.source.id || link.source;
+      const targetId = link.target.id || link.target;
+      if (ringNodes.has(sourceId) && ringNodes.has(targetId)) {
+        ringLinks.add(link);
+      }
+    });
+    setHighlightLinks(ringLinks);
+
+    // Zoom to fit ring nodes
+    if (graphRef.current && graphData) {
+      setTimeout(() => {
+        const ringNodeObjects = graphData.nodes.filter(n => ringNodes.has(n.id));
+        if (ringNodeObjects.length > 0) {
+          // Calculate center of ring nodes
+          const centerX = ringNodeObjects.reduce((sum, n) => sum + (n.x || 0), 0) / ringNodeObjects.length;
+          const centerY = ringNodeObjects.reduce((sum, n) => sum + (n.y || 0), 0) / ringNodeObjects.length;
+          graphRef.current.centerAt(centerX, centerY, 1000);
+          graphRef.current.zoom(2.5, 1000);
         }
-      });
-      setHighlightLinks(linked);
-    } else if (!selectedNode) {
-      setHighlightLinks(new Set());
+      }, 100);
     }
-  }, [graphData, selectedNode]);
+  };
 
-  // ── Link hover ────────────────────────────────────────────────────────────
-  const handleLinkHover = useCallback((link) => {
-    setHoverLink(link);
-  }, []);
+  // Helper function to convert any color format to rgba
+  const colorToRGBA = (color, alpha) => {
+    // If it's already rgb/rgba, convert it
+    if (color.startsWith('rgb')) {
+      return color.replace('rgb', 'rgba').replace(')', `, ${alpha})`).replace('rgba', 'rgba').replace(/,\s*[\d.]+\)$/, `, ${alpha})`);
+    }
+    // If it's HSL, convert to rgba (approximate method)
+    if (color.startsWith('hsl')) {
+      // For HSL, we'll use a canvas context to convert
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = color;
+      const rgbColor = ctx.fillStyle; // Browser converts to rgb
+      return rgbColor.replace('rgb', 'rgba').replace(')', `, ${alpha})`);
+    }
+    // If it's hex, convert to rgba
+    if (color.startsWith('#')) {
+      const hex = color.replace('#', '');
+      const r = parseInt(hex.substr(0, 2), 16);
+      const g = parseInt(hex.substr(2, 2), 16);
+      const b = parseInt(hex.substr(4, 2), 16);
+      return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+    }
+    return color;
+  };
 
-  // ── Canvas: Draw nodes ────────────────────────────────────────────────────
-  const drawNode = useCallback((node, ctx, globalScale) => {
-    if (!node || !isFinite(node.x) || !isFinite(node.y)) return;
+  const nodeCanvasObject = (node, ctx, globalScale) => {
+    if (!node || typeof node.x !== 'number' || typeof node.y !== 'number' ||
+      !isFinite(node.x) || !isFinite(node.y)) return;
 
-    const isSelected = selectedNode?.id === node.id;
     const isHighlighted = highlightNodes.has(node.id);
-    const isHovered = hoverNode?.id === node.id;
+    const isDimmed = highlightNodes.size > 0 && !isHighlighted;
+    const isHovered = hoverNode && hoverNode.id === node.id;
+    const nodeSize = isHovered ? node.size * 1.2 : node.size;
 
-    // Pattern highlight mode
-    const isPatternNode = activePattern ? patternNodeSets[activePattern]?.has(node.id) : false;
-    const patternActive = !!activePattern;
-
-    const isDimmed = patternActive
-      ? !isPatternNode && !isSelected
-      : (highlightNodes.size > 0 && !isHighlighted);
-
-    const r = node.size * (isHovered ? 1.15 : isPatternNode ? 1.2 : 1);
-    const alpha = isDimmed ? 0.12 : 1;
-
-    ctx.save();
-    ctx.globalAlpha = alpha;
-
-    // Pattern highlight glow (takes priority when a pattern button is active)
-    if (isPatternNode && patternActive && !isDimmed) {
-      const pColor = getPatternColor(activePattern);
-      // Bright outer glow
-      ctx.beginPath();
-      ctx.arc(node.x, node.y, r + 8, 0, Math.PI * 2);
-      ctx.fillStyle = pColor + '33'; // 20% opacity
-      ctx.fill();
-      // Pulsing ring
-      ctx.beginPath();
-      ctx.arc(node.x, node.y, r + 5, 0, Math.PI * 2);
-      ctx.strokeStyle = pColor;
-      ctx.lineWidth = 2.5 / globalScale;
-      ctx.setLineDash([5 / globalScale, 3 / globalScale]);
-      ctx.stroke();
-      ctx.setLineDash([]);
-    } else if (node.isInRing && !isDimmed) {
-      // Glow effect for ring members and suspicious nodes
-      ctx.beginPath();
-      ctx.arc(node.x, node.y, r + 6, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(239, 68, 68, 0.15)';
-      ctx.fill();
-      // Outer dashed ring for ring members
-      ctx.beginPath();
-      ctx.arc(node.x, node.y, r + 4, 0, Math.PI * 2);
-      ctx.strokeStyle = '#EF4444';
-      ctx.lineWidth = 2 / globalScale;
-      ctx.setLineDash([4 / globalScale, 3 / globalScale]);
-      ctx.stroke();
-      ctx.setLineDash([]);
-    } else if (node.isSuspicious && !isDimmed) {
-      // Subtle glow for suspicious but non-ring nodes
-      ctx.beginPath();
-      ctx.arc(node.x, node.y, r + 4, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(245, 158, 11, 0.12)';
-      ctx.fill();
-    }
-
-    // Node fill — pattern nodes use the pattern color
+    // ── Node circle ──────────────────────────────────────────
     ctx.beginPath();
-    ctx.arc(node.x, node.y, r, 0, Math.PI * 2);
-    ctx.fillStyle = (isPatternNode && patternActive) ? getPatternColor(activePattern) : node.color;
+    ctx.arc(node.x, node.y, nodeSize, 0, 2 * Math.PI);
+    if (isDimmed) {
+      ctx.fillStyle = 'rgba(120,130,150,0.18)';
+    } else {
+      ctx.fillStyle = node.color;
+    }
     ctx.fill();
 
-    // Node stroke — pattern highlighted or ring members get thick colored border
-    if (isPatternNode && patternActive) {
-      ctx.strokeStyle = '#FFFFFF';
-      ctx.lineWidth = (isSelected ? 4 : 3) / globalScale;
-    } else if (node.isInRing) {
-      ctx.strokeStyle = '#EF4444';
-      ctx.lineWidth = (isSelected ? 4 : 3) / globalScale;
-    } else if (node.isSuspicious) {
-      ctx.strokeStyle = '#F59E0B';
-      ctx.lineWidth = (isSelected ? 3.5 : 2.5) / globalScale;
+    // Border: ring members → ring colour; highlighted → white; else thin white
+    ctx.beginPath();
+    ctx.arc(node.x, node.y, nodeSize, 0, 2 * Math.PI);
+    if (!isDimmed && node.ringId && node.ringColor) {
+      ctx.strokeStyle = node.ringColor;
+      ctx.lineWidth = 2 / globalScale;
+    } else if (isHighlighted && !isDimmed) {
+      ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+      ctx.lineWidth = 2 / globalScale;
     } else {
-      ctx.strokeStyle = isSelected || isHovered ? COLORS.nodeStrokeHover : COLORS.nodeStroke;
-      ctx.lineWidth = (isSelected ? 3 : isHovered ? 2.5 : 1.5) / globalScale;
+      ctx.strokeStyle = isDimmed ? 'rgba(255,255,255,0.06)' : 'rgba(255,255,255,0.3)';
+      ctx.lineWidth = 0.8 / globalScale;
     }
     ctx.stroke();
 
-    // Label — always show for pattern-highlighted nodes
-    if ((isHovered || isSelected || isPatternNode || globalScale > 1.5) && !isDimmed) {
-      const fontSize = Math.max(10, 12 / globalScale);
-      ctx.font = `600 ${fontSize}px Inter, system-ui, sans-serif`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'top';
-      ctx.fillStyle = COLORS.text;
-      ctx.fillText(node.id, node.x, node.y + r + 4);
+    // ── Label ────────────────────────────────────────────────
+    const fontSize = Math.min(Math.max(10 / globalScale, 1.5), 11);
+    const label = node.id;
+    const labelY = node.y + nodeSize + 2 / globalScale;
+
+    ctx.font = `500 ${fontSize}px 'Inter','Segoe UI',sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+
+    if (!isDimmed) {
+      // Dark pill behind text for contrast
+      const tw = ctx.measureText(label).width;
+      const ph = 2 / globalScale;
+      const pv = 1 / globalScale;
+      ctx.fillStyle = 'rgba(8,10,16,0.82)';
+      ctx.beginPath();
+      if (ctx.roundRect) {
+        ctx.roundRect(node.x - tw / 2 - ph, labelY - pv, tw + ph * 2, fontSize + pv * 2, 2 / globalScale);
+      } else {
+        ctx.rect(node.x - tw / 2 - ph, labelY - pv, tw + ph * 2, fontSize + pv * 2);
+      }
+      ctx.fill();
+      ctx.fillStyle = isHighlighted || isHovered ? '#ffffff' : '#d0d7de';
+    } else {
+      ctx.fillStyle = 'rgba(180,190,200,0.22)';
     }
+    ctx.fillText(label, node.x, labelY);
+  };
 
-    ctx.restore();
-  }, [selectedNode, highlightNodes, hoverNode, activePattern, patternNodeSets, getPatternColor]);
-
-  // ── Canvas: Draw edges ────────────────────────────────────────────────────
-  const drawLink = useCallback((link, ctx, globalScale) => {
+  const linkCanvasObject = (link, ctx, globalScale) => {
     const start = link.source;
     const end = link.target;
-    if (!start || !end || !isFinite(start.x) || !isFinite(end.x)) return;
+    if (!start || !end ||
+      typeof start.x !== 'number' || typeof start.y !== 'number' ||
+      typeof end.x !== 'number' || typeof end.y !== 'number' ||
+      !isFinite(start.x) || !isFinite(start.y) ||
+      !isFinite(end.x) || !isFinite(end.y)) return;
 
     const isHighlighted = highlightLinks.has(link);
-    const isHovered = hoverLink === link;
+    const isDimmed = highlightLinks.size > 0 && !isHighlighted;
+    const isRingEdge = link.sameRing && link.ringColor;
 
-    // Pattern link highlighting
-    const srcId = start.id || link.source;
-    const tgtId = end.id || link.target;
-    const isPatternLink = activePattern ? patternLinkSets.has(`${srcId}->${tgtId}`) : false;
-    const patternActive = !!activePattern;
+    // ── Choose style ─────────────────────────────────────────
+    let color, lineWidth, alpha;
+    if (isDimmed) { color = '#6e7681'; lineWidth = 0.8; alpha = 0.15; }
+    else if (isRingEdge) { color = link.ringColor; lineWidth = 2.5; alpha = 0.9; }
+    else if (isHighlighted) { color = '#58a6ff'; lineWidth = 2; alpha = 0.9; }
+    else { color = '#6e7681'; lineWidth = 1; alpha = 0.45; }
 
-    const isDimmed = patternActive
-      ? !isPatternLink && !isHighlighted
-      : (highlightLinks.size > 0 && !isHighlighted);
-
-    const baseColor = link.isSuspicious ? COLORS.edgeSuspicious : COLORS.edgeDefault;
-    const pColor = patternActive ? getPatternColor(activePattern) : COLORS.edgeHighlight;
-    const color = isPatternLink ? pColor : (isHighlighted || isHovered ? COLORS.edgeHighlight : baseColor);
-    const width = Math.max(1, (isPatternLink ? link.width * 3 : isHighlighted ? link.width * 2 : link.width * 1.2)) / globalScale;
-    const alpha = isDimmed ? 0.05 : isPatternLink ? 1 : isHighlighted ? 1 : 0.5;
-
-    // Calculate straight line with slight offset for visual clarity
+    // ── Straight line ─────────────────────────────────────────
     const dx = end.x - start.x;
     const dy = end.y - start.y;
-    const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-    
-    // Slight curve only for parallel edges
-    const curve = 0.08;
-    const mx = (start.x + end.x) / 2 + (-dy / dist) * dist * curve;
-    const my = (start.y + end.y) / 2 + (dx / dist) * dist * curve;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    if (dist === 0) return;
 
-    ctx.save();
-    ctx.globalAlpha = alpha;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
+    // Stop line at node perimeter so arrow tip is visible
+    const endNodeSize = end.size || 6;
+    const ratio = (dist - endNodeSize - 1) / dist;
+    const ex = start.x + dx * ratio;
+    const ey = start.y + dy * ratio;
 
-    // Draw main edge line
-    ctx.strokeStyle = color;
-    ctx.lineWidth = width;
     ctx.beginPath();
     ctx.moveTo(start.x, start.y);
-    ctx.quadraticCurveTo(mx, my, end.x, end.y);
+    ctx.lineTo(ex, ey);
+    ctx.strokeStyle = color + Math.round(alpha * 255).toString(16).padStart(2, '0');
+    ctx.lineWidth = lineWidth;
+    ctx.setLineDash([]);
     ctx.stroke();
 
-    // Flowing animation for highlighted or pattern edges
-    if (isPatternLink || isHighlighted || isHovered) {
-      ctx.strokeStyle = '#FFFFFF';
-      ctx.lineWidth = width * 0.4;
-      ctx.setLineDash([4 / globalScale, 12 / globalScale]);
-      ctx.lineDashOffset = -flowOffset / globalScale;
-      ctx.globalAlpha = 0.8;
+    // ── Arrowhead ─────────────────────────────────────────────
+    if (!isDimmed) {
+      const angle = Math.atan2(dy, dx);
+      const arrowLen = Math.min(7 / globalScale, 7);
+      const arrowWid = arrowLen * 0.45;
+      ctx.save();
+      ctx.translate(ex, ey);
+      ctx.rotate(angle);
       ctx.beginPath();
-      ctx.moveTo(start.x, start.y);
-      ctx.quadraticCurveTo(mx, my, end.x, end.y);
-      ctx.stroke();
-      ctx.setLineDash([]);
+      ctx.moveTo(-arrowLen, -arrowWid);
+      ctx.lineTo(0, 0);
+      ctx.lineTo(-arrowLen, arrowWid);
+      ctx.closePath();
+      ctx.fillStyle = color + Math.round(alpha * 255).toString(16).padStart(2, '0');
+      ctx.fill();
+      ctx.restore();
+    }
+  };
+
+  // Calculate detailed ring metrics for investigation
+  const ringMetrics = useMemo(() => {
+    if (!fraudResults || !fraudResults.fraud_rings || !data || !data.edges) {
+      return new Map();
     }
 
-    // Draw clear arrowhead near target
-    const arrowSize = Math.max(6, 10 * link.width) / globalScale;
-    const t = 0.85; // Position arrow closer to target
-    const ax = (1-t)*(1-t)*start.x + 2*(1-t)*t*mx + t*t*end.x;
-    const ay = (1-t)*(1-t)*start.y + 2*(1-t)*t*my + t*t*end.y;
-    const tx = 2*(1-t)*(mx - start.x) + 2*t*(end.x - mx);
-    const ty = 2*(1-t)*(my - start.y) + 2*t*(end.y - my);
-    const angle = Math.atan2(ty, tx);
+    const metrics = new Map();
 
-    ctx.globalAlpha = isHighlighted ? 1 : alpha;
-    ctx.translate(ax, ay);
-    ctx.rotate(angle);
-    
-    // Filled triangle arrowhead
-    ctx.beginPath();
-    ctx.moveTo(arrowSize * 0.5, 0);
-    ctx.lineTo(-arrowSize * 0.5, -arrowSize * 0.35);
-    ctx.lineTo(-arrowSize * 0.3, 0);
-    ctx.lineTo(-arrowSize * 0.5, arrowSize * 0.35);
-    ctx.closePath();
-    ctx.fillStyle = color;
-    ctx.fill();
+    fraudResults.fraud_rings.forEach(ring => {
+      const members = new Set(ring.member_accounts);
 
-    ctx.restore();
-  }, [highlightLinks, hoverLink, flowOffset, activePattern, patternLinkSets, getPatternColor]);
+      // Find all transactions involving ring members
+      const ringTransactions = data.edges.filter(edge =>
+        members.has(edge.source) && members.has(edge.target)
+      );
 
-  // ── Render ────────────────────────────────────────────────────────────────
-  const suspiciousCount = graphData.nodes.filter(n => n.isSuspicious).length;
-  const totalVolume = graphData.links.reduce((s, l) => s + l.amount, 0);
+      // Calculate total transaction volume
+      const totalVolume = ringTransactions.reduce((sum, edge) => sum + edge.amount, 0);
+      const transactionCount = ringTransactions.length;
+
+      // Calculate time span if timestamps are available
+      let timeSpan = null;
+      let earliestDate = null;
+      let latestDate = null;
+
+      if (ringTransactions.length > 0 && ringTransactions[0].timestamp) {
+        const timestamps = ringTransactions.map(t => new Date(t.timestamp).getTime());
+        const earliest = Math.min(...timestamps);
+        const latest = Math.max(...timestamps);
+        earliestDate = new Date(earliest);
+        latestDate = new Date(latest);
+
+        // Calculate time span in days
+        const spanMs = latest - earliest;
+        const spanDays = Math.floor(spanMs / (1000 * 60 * 60 * 24));
+        const spanHours = Math.floor((spanMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+
+        if (spanDays > 0) {
+          timeSpan = `${spanDays} day${spanDays > 1 ? 's' : ''}${spanHours > 0 ? ` ${spanHours}h` : ''}`;
+        } else if (spanHours > 0) {
+          const spanMinutes = Math.floor((spanMs % (1000 * 60 * 60)) / (1000 * 60));
+          timeSpan = `${spanHours} hour${spanHours > 1 ? 's' : ''}${spanMinutes > 0 ? ` ${spanMinutes}m` : ''}`;
+        } else {
+          timeSpan = 'Less than 1 hour';
+        }
+      }
+
+      // Pattern explanation based on pattern type
+      const patternExplanations = {
+        'cycle': `This ring exhibits circular fund routing behavior, where money flows in a loop through ${ring.member_count} accounts. This is a classic money laundering technique used to obscure the origin of funds through layering.`,
+        'fan_in': `This ring shows smurfing collection pattern with multiple sender accounts consolidating funds into a central collector account. This is commonly used to aggregate structuring deposits below reporting thresholds.`,
+        'fan_out': `This ring demonstrates smurfing distribution pattern where a central account disperses funds to ${ring.member_count - 1} receiver accounts. This technique is used to break large sums into smaller amounts to evade detection.`,
+        'shell_chain': `This ring reveals a layered shell network with ${ring.member_count} accounts forming a chain. Each hop adds complexity to make tracking difficult, typical of sophisticated money laundering operations.`
+      };
+
+      metrics.set(ring.ring_id, {
+        totalVolume,
+        transactionCount,
+        timeSpan,
+        earliestDate,
+        latestDate,
+        explanation: patternExplanations[ring.pattern_type] || 'Suspicious coordinated activity detected across multiple accounts.'
+      });
+    });
+
+    return metrics;
+  }, [fraudResults, data]);
 
   return (
-    <div className="gv-container" ref={containerRef}>
-      
-      {/* ── Top Controls ── */}
-      <div className="gv-toolbar">
-        <div className="gv-toolbar-left">
-          <h2 className="gv-title">Transaction Network Analysis</h2>
-          <div className="gv-stats-bar">
-            <span>{graphData.nodes.length} nodes</span>
-            <span>{graphData.links.length} edges</span>
-            {suspiciousCount > 0 && (
-              <span className="gv-stat-alert">{suspiciousCount} suspicious</span>
+    <div className="graph-section">
+      <div className="graph-header-modern">
+        <div className="header-left">
+          <h2>🕸️ Transaction Network Intelligence</h2>
+          <div className="graph-subtitle-row">
+            <p className="graph-subtitle">Interactive Financial Crime Investigation Dashboard</p>
+            {fraudResults && (
+              <span className={`layout-mode-badge layout-mode-${layoutAnalysis.mode.toLowerCase().replace(/_/g, '-')}`}>
+                {{
+                  'ISOLATED_RINGS': '◉ Isolated Rings',
+                  'MULTIPLE_DISCONNECTED_RINGS': '◉ Multiple Rings',
+                  'INTERCONNECTED_MIXED': '◉ Interconnected',
+                }[layoutAnalysis.mode]}
+              </span>
             )}
           </div>
         </div>
-
-        {/* ── Pattern Highlight Buttons ── */}
-        {fraudResults && (
-          <div className="gv-pattern-buttons">
-            <span className="gv-pattern-label">Highlight Pattern:</span>
-            <button
-              className={`gv-pattern-btn gv-pattern-cycle ${activePattern === 'cycle' ? 'active' : ''} ${patternNodeSets.cycle.size === 0 ? 'empty' : ''}`}
-              onClick={() => patternNodeSets.cycle.size > 0 && setActivePattern(prev => prev === 'cycle' ? null : 'cycle')}
-              disabled={patternNodeSets.cycle.size === 0}
-              title={patternNodeSets.cycle.size > 0 ? 'Highlight Circular Fund Routing (Cycles)' : 'No cycle patterns detected'}
-            >
-              🔄 Cycles
-              {patternNodeSets.cycle.size > 0 && (
-                <span className="gv-pattern-count">{patternNodeSets.cycle.size}</span>
-              )}
-            </button>
-            <button
-              className={`gv-pattern-btn gv-pattern-smurfing ${activePattern === 'smurfing' ? 'active' : ''} ${patternNodeSets.smurfing.size === 0 ? 'empty' : ''}`}
-              onClick={() => patternNodeSets.smurfing.size > 0 && setActivePattern(prev => prev === 'smurfing' ? null : 'smurfing')}
-              disabled={patternNodeSets.smurfing.size === 0}
-              title={patternNodeSets.smurfing.size > 0 ? 'Highlight Smurfing Patterns (Fan-in / Fan-out)' : 'No smurfing patterns detected'}
-            >
-              📥📤 Smurfing
-              {patternNodeSets.smurfing.size > 0 && (
-                <span className="gv-pattern-count">{patternNodeSets.smurfing.size}</span>
-              )}
-            </button>
-            <button
-              className={`gv-pattern-btn gv-pattern-shell ${activePattern === 'shell_chain' ? 'active' : ''} ${patternNodeSets.shell_chain.size === 0 ? 'empty' : ''}`}
-              onClick={() => patternNodeSets.shell_chain.size > 0 && setActivePattern(prev => prev === 'shell_chain' ? null : 'shell_chain')}
-              disabled={patternNodeSets.shell_chain.size === 0}
-              title={patternNodeSets.shell_chain.size > 0 ? 'Highlight Layered Shell Networks' : 'No shell network patterns detected'}
-            >
-              🏢 Shell Networks
-              {patternNodeSets.shell_chain.size > 0 && (
-                <span className="gv-pattern-count">{patternNodeSets.shell_chain.size}</span>
-              )}
-            </button>
-          </div>
-        )}
-        <div className="gv-toolbar-right">
-          <div className="gv-control-group">
-            <label>Neighbor Depth</label>
-            <div className="gv-btn-group">
-              <button 
-                className={`gv-btn ${neighborDepth === 1 ? 'active' : ''}`}
-                onClick={() => setNeighborDepth(1)}>1-hop</button>
-              <button 
-                className={`gv-btn ${neighborDepth === 2 ? 'active' : ''}`}
-                onClick={() => setNeighborDepth(2)}>2-hop</button>
-            </div>
-          </div>
-          <div className="gv-control-group">
-            <label>Filters</label>
-            <div className="gv-btn-group">
-              <button 
-                className={`gv-btn ${!showLowWeight ? 'active' : ''}`}
-                onClick={() => setShowLowWeight(v => !v)}>
-                Hide Low Value
-              </button>
-              <button 
-                className={`gv-btn ${showOnlySuspicious ? 'active' : ''}`}
-                onClick={() => setShowOnlySuspicious(v => !v)}>
-                Suspicious Only
-              </button>
-            </div>
-          </div>
-          <button className="gv-btn gv-btn-fit" onClick={() => graphRef.current?.zoomToFit(400, 50)}>
+        <div className="graph-controls-top">
+          <button
+            className={`depth-toggle ${neighborDepth === 1 ? 'active' : ''}`}
+            onClick={() => {
+              console.log('Setting neighbor depth to 1');
+              setNeighborDepth(1);
+            }}
+            title="Show 1-hop neighbors"
+          >
+            1-Hop
+          </button>
+          <button
+            className={`depth-toggle ${neighborDepth === 2 ? 'active' : ''}`}
+            onClick={() => {
+              console.log('Setting neighbor depth to 2');
+              setNeighborDepth(2);
+            }}
+            title="Show 2-hop neighbors"
+          >
+            2-Hop
+          </button>
+          <button
+            className={`depth-toggle ${clusterByRing ? 'active' : ''}`}
+            onClick={() => {
+              console.log('Toggling cluster mode:', !clusterByRing);
+              setClusterByRing(!clusterByRing);
+            }}
+            title="Group nodes by fraud ring"
+          >
+            🔗 Cluster
+          </button>
+          <button
+            className={`depth-toggle ${heatmapMode ? 'active' : ''}`}
+            onClick={() => {
+              console.log('Toggling heatmap mode:', !heatmapMode);
+              setHeatmapMode(!heatmapMode);
+            }}
+            title="Toggle suspicion score heatmap"
+          >
+            🔥 Heatmap
+          </button>
+          <button
+            className={`depth-toggle ${showFlowAnimation ? 'active' : ''}`}
+            onClick={() => setShowFlowAnimation(!showFlowAnimation)}
+            title="Toggle edge flow animation"
+          >
+            ⚡ Flow
+          </button>
+          <button
+            className="zoom-fit-btn"
+            onClick={() => graphRef.current?.zoomToFit(400)}
+            title="Fit graph to view"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <circle cx="11" cy="11" r="8"></circle>
+              <path d="m21 21-4.35-4.35"></path>
+            </svg>
             Fit View
           </button>
         </div>
       </div>
 
-      {/* ── Main Content ── */}
-      <div className="gv-main">
-        
-        {/* ── Graph Canvas ── */}
-        <div className="gv-graph-area">
-          <ForceGraph2D
-            ref={graphRef}
-            graphData={graphData}
-            width={dimensions.width}
-            height={dimensions.height}
-            backgroundColor={COLORS.bg}
-            nodeId="id"
-            nodeVal="size"
-            nodeCanvasObject={drawNode}
-            linkCanvasObject={drawLink}
-            onNodeClick={handleNodeClick}
-            onNodeHover={handleNodeHover}
-            onLinkHover={handleLinkHover}
-            onBackgroundClick={handleBackgroundClick}
-            cooldownTicks={300}
-            d3AlphaDecay={0.015}
-            d3VelocityDecay={0.3}
-            d3AlphaMin={0.001}
-            d3Force="charge"
-            d3ForceStrength={-400}
-            linkDistance={120}
-            enableNodeDrag={true}
-            enableZoomInteraction={true}
-            enablePanInteraction={true}
-            minZoom={0.3}
-            maxZoom={8}
-          />
+      <div className="graph-legend-modern">
+        <div className="legend-section">
+          <span className="legend-title">Node Types:</span>
+          <div className="legend-items">
+            <div className="legend-item-modern">
+              <span className="legend-dot-modern normal"></span>
+              <span>Normal Account</span>
+            </div>
+            <div className="legend-item-modern">
+              <span className="legend-dot-modern suspicious"></span>
+              <span>Suspicious Account</span>
+            </div>
+            <div className="legend-item-modern">
+              <span className="legend-dot-modern ring"></span>
+              <span>Fraud Ring Member</span>
+            </div>
+          </div>
+        </div>
+        <div className="legend-section">
+          <span className="legend-title">Edges:</span>
+          <div className="legend-items">
+            <div className="legend-item-modern">
+              <span className="legend-line-modern normal"></span>
+              <span>Transaction</span>
+            </div>
+            <div className="legend-item-modern">
+              <span className="legend-line-modern ring"></span>
+              <span>Ring Transaction</span>
+            </div>
+          </div>
+        </div>
+        {fraudResults && fraudResults.fraud_rings && fraudResults.fraud_rings.length > 0 && (
+          <div className="legend-section fraud-rings-legend">
+            <span className="legend-title">🔍 Fraud Rings (Click to Investigate):</span>
+            <div className="rings-legend-grid">
+              {fraudResults.fraud_rings.slice(0, 5).map(ring => (
+                <div
+                  key={ring.ring_id}
+                  className={`ring-legend-item ${selectedRing?.ring_id === ring.ring_id ? 'active' : ''}`}
+                  onClick={() => handleRingSelect(ring)}
+                  title={`${ring.description} - Click to investigate`}
+                >
+                  <span
+                    className="ring-color-dot"
+                    style={{ backgroundColor: ringColors[ring.ring_id] }}
+                  ></span>
+                  <span className="ring-legend-id">{ring.ring_id}</span>
+                  <span className="ring-legend-type">{ring.pattern_type.replace('_', ' ')}</span>
+                  <span className="ring-legend-score">{ring.risk_score.toFixed(0)}</span>
+                </div>
+              ))}
+              {fraudResults.fraud_rings.length > 5 && (
+                <div className="ring-legend-more">
+                  +{fraudResults.fraud_rings.length - 5} more rings
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
 
-          {/* ── Hover Tooltip ── */}
-          {hoverNode && !selectedNode && (
-            <div 
-              className="gv-tooltip"
-              style={{
-                left: Math.min(dimensions.width - 220, Math.max(10, hoverNode.x + 15)),
-                top: Math.max(10, hoverNode.y - 10)
-              }}>
-              <div className="gv-tt-header">
-                <span className="gv-tt-id">{hoverNode.id}</span>
-                {hoverNode.isSuspicious && (
-                  <span className={`gv-tt-badge ${hoverNode.riskLevel.toLowerCase()}`}>
-                    {hoverNode.riskLevel}
-                  </span>
-                )}
-              </div>
-              <div className="gv-tt-body">
-                <div className="gv-tt-row">
-                  <span>In-degree</span><span>{hoverNode.in_degree || 0}</span>
-                </div>
-                <div className="gv-tt-row">
-                  <span>Out-degree</span><span>{hoverNode.out_degree || 0}</span>
-                </div>
-                <div className="gv-tt-row">
-                  <span>Total Volume</span>
-                  <span>${((hoverNode.total_amount_sent || 0) + (hoverNode.total_amount_received || 0)).toLocaleString()}</span>
-                </div>
-                {hoverNode.score > 0 && (
-                  <div className="gv-tt-row">
-                    <span>Risk Score</span>
-                    <span className="gv-tt-score">{hoverNode.score.toFixed(1)}</span>
+      <div className="graph-layout">
+        <div className="graph-main">
+          <div className="graph-wrapper-modern">
+            <ForceGraph2D
+              ref={graphRef}
+              graphData={graphData}
+              width={window.innerWidth * 0.65}
+              height={900}
+              nodeId="id"
+              nodeVal="size"
+              nodeCanvasObject={nodeCanvasObject}
+              nodePointerAreaPaint={(node, color, ctx) => {
+                if (
+                  !node ||
+                  typeof node.x !== 'number' || !isFinite(node.x) ||
+                  typeof node.y !== 'number' || !isFinite(node.y)
+                ) return;
+                // Generous hit-zone: drawn radius + comfortable click tolerance
+                const r = Math.max(node.size || 8, 8) * 1.4 + 8;
+                ctx.fillStyle = color;
+                ctx.beginPath();
+                ctx.arc(node.x, node.y, r, 0, 2 * Math.PI);
+                ctx.fill();
+              }}
+              linkCanvasObject={linkCanvasObject}
+              linkDirectionalArrowLength={0}
+              linkWidth={1.5}
+              onNodeClick={handleNodeClick}
+              onNodeHover={handleNodeHover}
+              onBackgroundClick={handleBackgroundClick}
+              cooldownTicks={physicsSettings.cooldown}
+              d3AlphaDecay={physicsSettings.alphaDecay}
+              d3VelocityDecay={physicsSettings.velocityDecay}
+              d3Force="charge"
+              d3ForceStrength={physicsSettings.repulsion}
+              linkDistance={physicsSettings.linkDistance}
+              d3ForceCollision={node => node.size + physicsSettings.collision}
+              backgroundColor="#0a0e14"
+              enableNodeDrag={true}
+              enableZoomInteraction={true}
+              enablePanInteraction={true}
+              warmupTicks={physicsSettings.warmup}
+              onEngineStop={() => {
+                console.log(`[AdaptiveLayout] layout stabilised (mode=${layoutAnalysis.mode})`);
+                if (graphRef.current?.zoomToFit) graphRef.current.zoomToFit(600, 60);
+              }}
+            />
+
+            {/* Floating Tooltip for Hover */}
+            {hoverNode && !selectedNode && (() => {
+              const tooltipPos = getTooltipPosition(hoverNode);
+              return (
+                <div
+                  className="node-tooltip-float"
+                  style={{
+                    position: 'absolute',
+                    left: `${tooltipPos.left}px`,
+                    top: `${tooltipPos.top}px`,
+                    pointerEvents: 'none',
+                    transform: tooltipPos.transform,
+                    zIndex: 1000
+                  }}
+                >
+                  <div className="tooltip-modern">
+                    <div className="tooltip-header">
+                      <strong>{hoverNode.id}</strong>
+                      {hoverNode.isSuspicious && (
+                        <span className="tooltip-badge suspicious">⚠️ Suspicious</span>
+                      )}
+                    </div>
+                    {hoverNode.suspicionScore > 0 && (
+                      <div className="tooltip-row">
+                        <span className="tooltip-label">Risk Score:</span>
+                        <span className="tooltip-value suspicion-score">
+                          {Math.round(hoverNode.suspicionScore)}%
+                        </span>
+                      </div>
+                    )}
+                    {hoverNode.ringId && (
+                      <div className="tooltip-row">
+                        <span className="tooltip-label">Fraud Ring:</span>
+                        <span
+                          className="tooltip-value"
+                          style={{ color: hoverNode.ringColor }}
+                        >
+                          #{hoverNode.ringId}
+                        </span>
+                      </div>
+                    )}
+                    <div className="tooltip-row">
+                      <span className="tooltip-label">Sent:</span>
+                      <span className="tooltip-value">${hoverNode.total_sent?.toFixed(2) || '0.00'}</span>
+                    </div>
+                    <div className="tooltip-row">
+                      <span className="tooltip-label">Received:</span>
+                      <span className="tooltip-value">${hoverNode.total_received?.toFixed(2) || '0.00'}</span>
+                    </div>
+                    {hoverNode.detectedPatterns && hoverNode.detectedPatterns.length > 0 && (
+                      <div className="tooltip-patterns">
+                        {hoverNode.detectedPatterns.slice(0, 2).map((pattern, idx) => (
+                          <span key={idx} className="pattern-chip-small">{pattern}</span>
+                        ))}
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* ── Edge Tooltip ── */}
-          {hoverLink && (
-            <div className="gv-edge-tooltip">
-              <div className="gv-ett-row">
-                <span>From</span><span>{hoverLink.source?.id || hoverLink.source}</span>
-              </div>
-              <div className="gv-ett-row">
-                <span>To</span><span>{hoverLink.target?.id || hoverLink.target}</span>
-              </div>
-              <div className="gv-ett-row">
-                <span>Amount</span><span>${hoverLink.amount?.toLocaleString()}</span>
-              </div>
-              <div className="gv-ett-row">
-                <span>Transactions</span><span>{hoverLink.txCount}</span>
-              </div>
-            </div>
-          )}
-
-          {/* ── Legend ── */}
-          <div className="gv-legend">
-            <div className="gv-legend-title">Risk Level</div>
-            <div className="gv-legend-item">
-              <span className="gv-legend-dot" style={{background: COLORS.nodeLow}}></span>
-              <span>Low Risk</span>
-            </div>
-            <div className="gv-legend-item">
-              <span className="gv-legend-dot" style={{background: COLORS.nodeMedium}}></span>
-              <span>Medium Risk</span>
-            </div>
-            <div className="gv-legend-item">
-              <span className="gv-legend-dot" style={{background: COLORS.nodeHigh}}></span>
-              <span>High Risk</span>
-            </div>
-            <div className="gv-legend-sep"></div>
-            <div className="gv-legend-item">
-              <span className="gv-legend-line" style={{background: COLORS.edgeDefault}}></span>
-              <span>Normal</span>
-            </div>
-            <div className="gv-legend-item">
-              <span className="gv-legend-line" style={{background: COLORS.edgeSuspicious}}></span>
-              <span>Suspicious</span>
-            </div>
-            <div className="gv-legend-sep"></div>
-            <div className="gv-legend-item">
-              <span className="gv-legend-dot" style={{background: COLORS.nodeHigh, border: '2px dashed #EF4444', boxShadow: '0 0 6px rgba(239,68,68,0.5)'}}></span>
-              <span>Ring Member</span>
-            </div>
-            {activePattern && (
-              <>
-                <div className="gv-legend-sep"></div>
-                <div className="gv-legend-title">Active Filter</div>
-                <div className="gv-legend-item">
-                  <span className="gv-legend-dot" style={{background: getPatternColor(activePattern), boxShadow: `0 0 8px ${getPatternColor(activePattern)}80`}}></span>
-                  <span>
-                    {activePattern === 'cycle' ? 'Cycle Members' : activePattern === 'smurfing' ? 'Smurfing Accounts' : 'Shell Network'}
-                  </span>
                 </div>
-              </>
-            )}
+              );
+            })()}
           </div>
         </div>
 
-        {/* ── Side Panel ── */}
-        <div className="gv-panel">
-          {selectedNode ? (
+        <div className="investigation-panel">
+          {selectedRing ? (
+            /* Fraud Ring Investigation Panel */
             <>
-              <div className="gv-panel-header">
-                <h3>Account Details</h3>
-                <button className="gv-panel-close" onClick={handleBackgroundClick}>×</button>
+              <div className="panel-header ring-header">
+                <h3>🔗 Fraud Ring Investigation</h3>
+                <button onClick={handleBackgroundClick} className="close-panel">×</button>
               </div>
 
-              <div className="gv-panel-section">
-                <div className="gv-account-id">{selectedNode.id}</div>
-                <div className={`gv-risk-badge ${selectedNode.riskLevel.toLowerCase()}`}>
-                  {selectedNode.riskLevel} RISK
-                  {selectedNode.score > 0 && <span className="gv-risk-score">{selectedNode.score.toFixed(1)}</span>}
+              <div className="ring-id-display" style={{ borderColor: ringColors[selectedRing.ring_id] }}>
+                <span className="ring-id-badge-large" style={{ backgroundColor: ringColors[selectedRing.ring_id] }}>
+                  {selectedRing.ring_id}
+                </span>
+                <span className="ring-pattern-type">
+                  {selectedRing.pattern_type.replace('_', ' ').toUpperCase()}
+                </span>
+              </div>
+
+              <div className="ring-risk-alert">
+                <div className="risk-icon-wrapper">
+                  <svg className="ring-alert-icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+                    <line x1="12" y1="9" x2="12" y2="13"></line>
+                    <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                  </svg>
+                </div>
+                <div className="risk-content">
+                  <span className="risk-label">COORDINATED FRAUD DETECTED</span>
+                  <span className="ring-risk-score-large">{selectedRing.risk_score.toFixed(1)}</span>
                 </div>
               </div>
 
-              <div className="gv-panel-section">
-                <h4>Connections</h4>
-                <div className="gv-panel-stats">
-                  <div className="gv-panel-stat">
-                    <span className="gv-panel-stat-value">{selectedNode.in_degree || 0}</span>
-                    <span className="gv-panel-stat-label">Incoming</span>
+              <div className="ring-stats-grid">
+                <div className="ring-stat-card">
+                  <div className="ring-stat-icon">👥</div>
+                  <div className="ring-stat-content">
+                    <div className="ring-stat-value">{selectedRing.member_count}</div>
+                    <div className="ring-stat-label">Accounts Involved</div>
                   </div>
-                  <div className="gv-panel-stat">
-                    <span className="gv-panel-stat-value">{selectedNode.out_degree || 0}</span>
-                    <span className="gv-panel-stat-label">Outgoing</span>
+                </div>
+                <div className="ring-stat-card">
+                  <div className="ring-stat-icon">💰</div>
+                  <div className="ring-stat-content">
+                    <div className="ring-stat-value">
+                      ${ringMetrics.get(selectedRing.ring_id)?.totalVolume?.toLocaleString(undefined, { maximumFractionDigits: 0 }) || '0'}
+                    </div>
+                    <div className="ring-stat-label">Total Volume</div>
                   </div>
-                  <div className="gv-panel-stat">
-                    <span className="gv-panel-stat-value">{selectedNode.total_transactions || 0}</span>
-                    <span className="gv-panel-stat-label">Total Tx</span>
+                </div>
+                <div className="ring-stat-card">
+                  <div className="ring-stat-icon">🔄</div>
+                  <div className="ring-stat-content">
+                    <div className="ring-stat-value">
+                      {ringMetrics.get(selectedRing.ring_id)?.transactionCount || 0}
+                    </div>
+                    <div className="ring-stat-label">Transactions</div>
+                  </div>
+                </div>
+                <div className="ring-stat-card">
+                  <div className="ring-stat-icon">⏱️</div>
+                  <div className="ring-stat-content">
+                    <div className="ring-stat-value time-span">
+                      {ringMetrics.get(selectedRing.ring_id)?.timeSpan || 'N/A'}
+                    </div>
+                    <div className="ring-stat-label">Activity Span</div>
                   </div>
                 </div>
               </div>
 
-              <div className="gv-panel-section">
-                <h4>Transaction Volume</h4>
-                <div className="gv-panel-detail">
-                  <span>Amount Sent</span>
-                  <span>${(selectedNode.total_amount_sent || 0).toLocaleString()}</span>
+              {ringMetrics.get(selectedRing.ring_id)?.earliestDate && (
+                <div className="ring-timeline">
+                  <div className="timeline-header">📅 Activity Timeline</div>
+                  <div className="timeline-dates">
+                    <div className="timeline-date">
+                      <span className="date-label">First Transaction:</span>
+                      <span className="date-value">
+                        {ringMetrics.get(selectedRing.ring_id).earliestDate.toLocaleDateString()}
+                        {' '}
+                        {ringMetrics.get(selectedRing.ring_id).earliestDate.toLocaleTimeString()}
+                      </span>
+                    </div>
+                    <div className="timeline-date">
+                      <span className="date-label">Last Transaction:</span>
+                      <span className="date-value">
+                        {ringMetrics.get(selectedRing.ring_id).latestDate.toLocaleDateString()}
+                        {' '}
+                        {ringMetrics.get(selectedRing.ring_id).latestDate.toLocaleTimeString()}
+                      </span>
+                    </div>
+                  </div>
                 </div>
-                <div className="gv-panel-detail">
-                  <span>Amount Received</span>
-                  <span>${(selectedNode.total_amount_received || 0).toLocaleString()}</span>
+              )}
+
+              <div className="ring-explanation">
+                <div className="explanation-header">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>
+                    <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                  </svg>
+                  <span>Why This Ring Was Flagged</span>
                 </div>
-                <div className="gv-panel-detail">
-                  <span>Net Flow</span>
-                  <span className={selectedNode.net_flow >= 0 ? 'positive' : 'negative'}>
-                    ${(selectedNode.net_flow || 0).toLocaleString()}
-                  </span>
+                <p className="explanation-text">
+                  {ringMetrics.get(selectedRing.ring_id)?.explanation || selectedRing.description}
+                </p>
+              </div>
+
+              <div className="ring-members-section">
+                <div className="members-header">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                    <circle cx="9" cy="7" r="4"></circle>
+                    <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+                    <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+                  </svg>
+                  <span>Member Accounts ({selectedRing.member_count})</span>
+                </div>
+                <div className="ring-members-list">
+                  {selectedRing.member_accounts.map(accountId => {
+                    const node = graphData.nodes.find(n => n.id === accountId);
+                    return (
+                      <div
+                        key={accountId}
+                        className="ring-member-item"
+                        onClick={() => {
+                          const memberNode = graphData.nodes.find(n => n.id === accountId);
+                          if (memberNode) {
+                            setSelectedRing(null);
+                            handleNodeClick(memberNode);
+                          }
+                        }}
+                        title="Click to view account details"
+                      >
+                        <span className="member-id">{accountId}</span>
+                        {node && (
+                          <>
+                            <span className="member-score">{node.suspicionScore?.toFixed(0) || '0'}</span>
+                            <span className="member-arrow">→</span>
+                          </>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
 
-              {selectedNode.patterns?.length > 0 && (
-                <div className="gv-panel-section">
-                  <h4>Detected Patterns</h4>
-                  <div className="gv-pattern-list">
-                    {selectedNode.patterns.map((p, i) => (
-                      <span key={i} className="gv-pattern-tag">{p}</span>
+              <div className="panel-footer">
+                <p className="hint-text-ring">💡 Click a member account to view individual details, or click background to deselect</p>
+              </div>
+            </>
+          ) : selectedNode ? (
+            <>
+              <div className="panel-header">
+                <h3>🔍 Account Investigation</h3>
+                <button onClick={handleBackgroundClick} className="close-panel">×</button>
+              </div>
+
+              <div className="panel-account-id">
+                <span className="account-label">Account ID:</span>
+                <span className="account-id-value">{selectedNode.id}</span>
+              </div>
+
+              {(() => {
+                const riskData = riskIntelligenceMap.get(selectedNode.id);
+                if (riskData) {
+                  return (
+                    <>
+                      <div className="risk-intelligence-alert" style={{
+                        background: riskData.risk_level === 'CRITICAL' ? 'linear-gradient(135deg, rgba(220, 38, 38, 0.2), rgba(185, 28, 28, 0.1))' :
+                          riskData.risk_level === 'HIGH' ? 'linear-gradient(135deg, rgba(245, 158, 11, 0.2), rgba(217, 119, 6, 0.1))' :
+                            riskData.risk_level === 'MEDIUM' ? 'linear-gradient(135deg, rgba(234, 179, 8, 0.2), rgba(202, 138, 4, 0.1))' :
+                              'linear-gradient(135deg, rgba(16, 185, 129, 0.2), rgba(5, 150, 105, 0.1))',
+                        border: `2px solid ${riskData.risk_level === 'CRITICAL' ? 'rgba(220, 38, 38, 0.4)' :
+                          riskData.risk_level === 'HIGH' ? 'rgba(245, 158, 11, 0.4)' :
+                            riskData.risk_level === 'MEDIUM' ? 'rgba(234, 179, 8, 0.4)' :
+                              'rgba(16, 185, 129, 0.4)'}`
+                      }}>
+                        <svg className="alert-icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+                          <line x1="12" y1="9" x2="12" y2="13"></line>
+                          <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                        </svg>
+                        <div className="alert-content">
+                          <span className="alert-title risk-level-{riskData.risk_level.toLowerCase()}">{riskData.risk_level} RISK</span>
+                          <span className="risk-score-large">{riskData.risk_score.toFixed(1)}</span>
+                        </div>
+                      </div>
+
+                      {/* Risk Factors Breakdown */}
+                      <div className="risk-factors-section">
+                        <div className="section-header-small">📊 Risk Factor Analysis</div>
+                        <div className="risk-factors-mini-grid">
+                          {Object.entries(riskData.risk_factors).map(([factor, score]) => (
+                            <div key={factor} className="risk-factor-mini">
+                              <span className="factor-label-mini">{factor.replace('_', ' ')}</span>
+                              <div className="factor-bar-mini-bg">
+                                <div className="factor-bar-mini-fill" style={{ width: `${score}%` }} />
+                              </div>
+                              <span className="factor-score-mini">{score.toFixed(0)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Customized Explanation */}
+                      <div className="explanation-section">
+                        <div className="section-header-small">⚠️ Risk Assessment</div>
+                        <div className="explanation-text-box">
+                          <p>{riskData.explanation}</p>
+                        </div>
+                      </div>
+                    </>
+                  );
+                } else if (selectedNode.isSuspicious) {
+                  return (
+                    <div className="suspicion-alert">
+                      <svg className="alert-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+                        <line x1="12" y1="9" x2="12" y2="13"></line>
+                        <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                      </svg>
+                      <div className="alert-content">
+                        <span className="alert-title">SUSPICIOUS ACTIVITY DETECTED</span>
+                        <span className="suspicion-score-large">{selectedNode.suspicionScore.toFixed(1)}</span>
+                      </div>
+                    </div>
+                  );
+                }
+                return null;
+              })()}
+
+              {selectedNode.ringId && (
+                <div className="ring-info" style={{ borderColor: selectedNode.ringColor }}>
+                  <svg className="ring-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <circle cx="12" cy="12" r="6"></circle>
+                    <circle cx="12" cy="12" r="2"></circle>
+                  </svg>
+                  <div>
+                    <span className="ring-label">Fraud Ring:</span>
+                    <span className="ring-id-text" style={{ color: selectedNode.ringColor }}>
+                      {selectedNode.ringId}
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {selectedNode.detectedPatterns && selectedNode.detectedPatterns.length > 0 && (
+                <div className="patterns-section">
+                  <span className="section-label">Detected Patterns:</span>
+                  <div className="pattern-chips">
+                    {selectedNode.detectedPatterns.map((pattern, idx) => (
+                      <span key={idx} className="pattern-chip">
+                        {pattern}
+                      </span>
                     ))}
                   </div>
                 </div>
               )}
 
-              {selectedNode.ringId && (
-                <div className="gv-panel-section">
-                  <h4>Fraud Ring</h4>
-                  <div className="gv-ring-badge">{selectedNode.ringId}</div>
+              <div className="panel-stats">
+                <div className="stat-card">
+                  <span className="stat-icon">📥</span>
+                  <div className="stat-content">
+                    <span className="stat-label">Incoming</span>
+                    <span className="stat-value">{selectedNode.in_degree}</span>
+                  </div>
                 </div>
-              )}
+                <div className="stat-card">
+                  <span className="stat-icon">📤</span>
+                  <div className="stat-content">
+                    <span className="stat-label">Outgoing</span>
+                    <span className="stat-value">{selectedNode.out_degree}</span>
+                  </div>
+                </div>
+              </div>
 
-              <div className="gv-panel-hint">
-                Click node again or background to deselect
+              <div className="panel-details">
+                <div className="detail-item">
+                  <span className="detail-label">Total Transactions:</span>
+                  <span className="detail-value">{selectedNode.total_transactions}</span>
+                </div>
+                <div className="detail-item">
+                  <span className="detail-label">Amount Sent:</span>
+                  <span className="detail-value amount">${selectedNode.total_amount_sent.toLocaleString()}</span>
+                </div>
+                <div className="detail-item">
+                  <span className="detail-label">Amount Received:</span>
+                  <span className="detail-value amount">${selectedNode.total_amount_received.toLocaleString()}</span>
+                </div>
+                <div className="detail-item">
+                  <span className="detail-label">Net Flow:</span>
+                  <span className={`detail-value amount ${selectedNode.net_flow >= 0 ? 'positive' : 'negative'}`}>
+                    ${selectedNode.net_flow.toLocaleString()}
+                  </span>
+                </div>
+              </div>
+
+              <div className="panel-footer">
+                <p className="hint-text">💡 Click another node or background to deselect</p>
               </div>
             </>
           ) : (
-            <div className="gv-panel-empty">
-              <div className="gv-panel-empty-icon">🔍</div>
-              <h4>Network Inspector</h4>
-              <p>Click any node to view account details and isolate its network neighborhood.</p>
-              <div className="gv-panel-tips">
-                <div className="gv-tip">• Scroll to zoom in/out</div>
-                <div className="gv-tip">• Drag to pan the view</div>
-                <div className="gv-tip">• Click + drag nodes to reposition</div>
-                <div className="gv-tip">• Hover for quick info</div>
-              </div>
+            <div className="panel-empty">
+              <svg className="empty-icon" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <circle cx="11" cy="11" r="8"></circle>
+                <path d="m21 21-4.35-4.35"></path>
+                <circle cx="11" cy="11" r="3"></circle>
+              </svg>
+              <h4>Investigation Mode</h4>
+              <p>Click any node to view account details, or select a fraud ring from the legend to begin investigation.</p>
             </div>
           )}
+        </div>
+      </div>
 
-          {/* ── Summary Stats ── */}
-          <div className="gv-panel-footer">
-            <div className="gv-summary-stat">
-              <span className="gv-summary-label">Total Volume</span>
-              <span className="gv-summary-value">${totalVolume.toLocaleString()}</span>
+      {hoverNode && (
+        <div
+          className="tooltip-modern"
+          style={{
+            position: 'fixed',
+            pointerEvents: 'none',
+            zIndex: 1000,
+          }}
+        >
+          <div className="tooltip-header">
+            <span className="tooltip-account-id">{hoverNode.id}</span>
+            {hoverNode.isSuspicious && (
+              <span className="tooltip-badge suspicious">
+                ⚠ {hoverNode.suspicionScore.toFixed(0)}
+              </span>
+            )}
+            {hoverNode.ringId && (
+              <span className="tooltip-badge ring" style={{ backgroundColor: hoverNode.ringColor }}>
+                {hoverNode.ringId}
+              </span>
+            )}
+          </div>
+          <div className="tooltip-body">
+            <div className="tooltip-row">
+              <span className="tooltip-label">Connections:</span>
+              <span className="tooltip-value">↓{hoverNode.in_degree} / ↑{hoverNode.out_degree}</span>
             </div>
-            {fraudResults?.fraud_rings?.length > 0 && (
-              <div className="gv-summary-stat">
-                <span className="gv-summary-label">Fraud Rings</span>
-                <span className="gv-summary-value gv-alert">{fraudResults.fraud_rings.length}</span>
+            <div className="tooltip-row">
+              <span className="tooltip-label">Transactions:</span>
+              <span className="tooltip-value">{hoverNode.total_transactions}</span>
+            </div>
+            <div className="tooltip-row">
+              <span className="tooltip-label">Volume:</span>
+              <span className="tooltip-value">${(hoverNode.total_amount_sent + hoverNode.total_amount_received).toLocaleString()}</span>
+            </div>
+            {hoverNode.detectedPatterns && hoverNode.detectedPatterns.length > 0 && (
+              <div className="tooltip-patterns">
+                {hoverNode.detectedPatterns.slice(0, 2).map((pattern, idx) => (
+                  <span key={idx} className="tooltip-pattern-tag">{pattern}</span>
+                ))}
               </div>
             )}
           </div>
         </div>
-      </div>
+      )}
 
-      {/* ── Footer ── */}
-      <div className="gv-footer">
-        <span>Zoom: scroll • Pan: drag background • Select: click node • Reset: click background</span>
+      <div className="graph-footer-modern">
+        <div className="footer-hints">
+          <span className="hint-item">💡 Click nodes to investigate</span>
+          <span className="hint-item">🖱️ Drag to reposition</span>
+          <span className="hint-item">🔍 Scroll to zoom</span>
+          <span className="hint-item">↔️ Drag background to pan</span>
+        </div>
       </div>
     </div>
   );
