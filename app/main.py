@@ -18,6 +18,7 @@ from app.detection import FraudDetectionEngine
 from app.risk_engine import RiskIntelligenceEngine
 from app.response_builder import ResponseBuilder
 from app.alert_engine import AlertEngine, AlertSeverity
+from app.chatbot_engine import FraudChatBot
 
 
 # Configure logging
@@ -56,6 +57,9 @@ response_builder: ResponseBuilder = ResponseBuilder()
 alert_engine: AlertEngine = AlertEngine(max_alerts=100)
 monitoring_mode: bool = False
 detection_strategy: str = "all_patterns"  # all_patterns, cycles_only, fan_patterns, shells_only
+
+# AI Chatbot
+chatbot: FraudChatBot = FraudChatBot()
 
 
 @app.get("/")
@@ -160,6 +164,16 @@ async def upload_csv(file: UploadFile = File(...)):
         summary = calculate_summary(df)
         logger.info(f"Summary calculated: {summary['total_transactions']} transactions, "
                    f"{summary['unique_accounts']} unique accounts")
+        
+        # Feed chatbot with dataset and graph context
+        chatbot.set_dataset_summary(summary)
+        graph_export = transaction_graph.export_for_visualization()
+        chatbot.set_graph_data(
+            nodes=graph_export['nodes'],
+            edges=graph_export['edges'],
+            summary=graph_export['summary']
+        )
+        chatbot.set_transactions_df(df)
         
         return UploadResponse(**summary)
         
@@ -313,6 +327,23 @@ async def detect_fraud():
         # Store results globally for risk intelligence
         global fraud_detection_results, risk_intelligence_data
         fraud_detection_results = results
+        
+        # Feed chatbot with fraud detection results
+        chatbot.set_fraud_results({
+            'suspicious_accounts': [
+                {'account_id': a.account_id, 'score': a.score,
+                 'risk_level': a.risk_level, 'patterns': a.patterns, 'factors': a.factors}
+                for a in suspicious_accounts
+            ],
+            'fraud_rings': [
+                {'ring_id': r.ring_id, 'pattern_type': r.pattern_type,
+                 'member_accounts': r.member_accounts, 'member_count': r.member_count,
+                 'risk_score': r.risk_score, 'description': r.description}
+                for r in fraud_rings
+            ],
+            'detection_summary': results['detection_summary']
+        })
+        chatbot.set_formatted_results(formatted_results)
         
         # Initialize Risk Intelligence Engine
         logger.info("Initializing Risk Intelligence Engine")
@@ -682,6 +713,30 @@ async def toggle_monitoring(enabled: bool):
         "status": "success",
         "monitoring_active": monitoring_mode
     })
+
+
+@app.post("/chat")
+async def chat(question: str):
+    """
+    AI Chatbot endpoint. Answers questions about uploaded dataset,
+    fraud detection results, graph analysis, and risk intelligence.
+    
+    Query params:
+        question: The user's question string
+    
+    Returns:
+        JSON with answer text, category, and status flags
+    """
+    if not question or not question.strip():
+        raise HTTPException(status_code=400, detail="Question cannot be empty")
+    
+    try:
+        logger.info(f"Chat query: {question}")
+        result = chatbot.answer(question.strip())
+        return JSONResponse(content=result)
+    except Exception as e:
+        logger.error(f"Chat error: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Chat error: {str(e)}")
 
 
 @app.exception_handler(HTTPException)

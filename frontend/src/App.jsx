@@ -7,6 +7,7 @@ import FraudRingsTable from './components/FraudRingsTable';
 import RiskRankingPanel from './components/RiskRankingPanel';
 import InvestigationTable from './components/InvestigationTable';
 import AlertPanel from './components/AlertPanel';
+import ChatBot from './components/ChatBot';
 import './App.css';
 
 function App() {
@@ -18,12 +19,29 @@ function App() {
   const [detectingFraud, setDetectingFraud] = useState(false);
   const [riskIntelligence, setRiskIntelligence] = useState(null);
   const [selectedView, setSelectedView] = useState('visualization'); // 'visualization', 'table', 'ranking'
+  const [resultsSummary, setResultsSummary] = useState(null);
+  const [chatOpen, setChatOpen] = useState(false);
+  const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'dark');
   
   // Monitoring system state
   const [alerts, setAlerts] = useState([]);
   const [monitoringActive, setMonitoringActive] = useState(false);
   const [detectionStrategy, setDetectionStrategy] = useState('all_patterns');
   const [autoRefreshInterval, setAutoRefreshInterval] = useState(null);
+
+  // Apply theme to document
+  useEffect(() => {
+    if (theme === 'light') {
+      document.documentElement.setAttribute('data-theme', 'light');
+    } else {
+      document.documentElement.removeAttribute('data-theme');
+    }
+    localStorage.setItem('theme', theme);
+  }, [theme]);
+
+  const toggleTheme = () => {
+    setTheme(prev => prev === 'dark' ? 'light' : 'dark');
+  };
 
   const handleUploadSuccess = (summary) => {
     console.log('Upload successful, summary:', summary);
@@ -88,6 +106,9 @@ function App() {
       setFraudResults(results);
       setError(null);
       
+      // Fetch the formatted results summary from download endpoint
+      await fetchResultsSummary();
+      
       // Fetch risk intelligence data
       await fetchRiskIntelligence();
     } catch (err) {
@@ -119,6 +140,19 @@ function App() {
     }
   };
 
+  const fetchResultsSummary = async () => {
+    console.log('Fetching results summary...');
+    try {
+      const response = await fetch('http://localhost:8000/download-results');
+      if (response.ok) {
+        const data = await response.json();
+        console.log('Results summary received:', data.summary);
+        setResultsSummary(data.summary || null);
+      }
+    } catch (err) {
+      console.error('Results summary fetch error:', err);
+    }
+  };
   const downloadResults = async () => {
     try {
       const response = await fetch('http://localhost:8000/download-results');
@@ -262,6 +296,9 @@ function App() {
       <header className="app-header">
         <h1>💰 Financial Crime Detection</h1>
         <p className="subtitle">Graph-Based Transaction Analysis</p>
+        <button className="theme-toggle-btn" onClick={toggleTheme} title={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}>
+          {theme === 'dark' ? '☀️' : '🌙'}
+        </button>
       </header>
 
       {error && (
@@ -398,7 +435,7 @@ function App() {
             
             {selectedView === 'visualization' && (
               <>
-                <ResultsSummary summary={fraudResults.summary} />
+                <ResultsSummary summary={resultsSummary} />
                 <FraudRingsTable rings={fraudResults.fraud_rings} />
               </>
             )}
@@ -449,6 +486,12 @@ function App() {
       <footer className="app-footer">
         <p>Step 4: Advanced Fraud Detection Results & JSON Export | Version 4.0.0</p>
       </footer>
+
+      <ChatBot 
+        isOpen={chatOpen} 
+        onToggle={() => setChatOpen(prev => !prev)} 
+        theme={theme}
+      />
     </div>
   );
 }

@@ -431,3 +431,34 @@
     padding: 0.5rem 0.75rem;
   }
 }
+
+/* Member Accounts Column */
+.col-member-accounts {
+  min-width: 200px;
+  max-width: 400px;
+}
+
+.member-accounts-cell {
+  color: rgba(255, 255, 255, 0.85);
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  word-break: break-word;
+  max-height: 120px;
+  overflow-y: auto;
+  padding-right: 0.5rem;
+}
+
+.member-accounts-cell::-webkit-scrollbar {
+  width: 4px;
+}
+
+.member-accounts-cell::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 2px;
+}
+
+.member-accounts-cell::-webkit-scrollbar-thumb {
+  background: rgba(139, 92, 246, 0.4);
+  border-radius: 2px;
+}

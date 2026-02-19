@@ -185,8 +185,21 @@ class TransactionGraph:
         return {
             'total_nodes': self.graph.number_of_nodes(),
             'total_edges': self.graph.number_of_edges(),
-            'is_connected': nx.is_weakly_connected(self.graph),
+            'is_connected': nx.is_weakly_connected(self.graph) if self.graph.number_of_nodes() > 0 else False,
             'density': nx.density(self.graph)
+        }
+
+    def export_for_visualization(self) -> Dict[str, Any]:
+        """
+        Export complete graph data for frontend visualization.
+        
+        Returns:
+            Dictionary with nodes, edges, and summary
+        """
+        return {
+            'nodes': self.get_all_nodes_with_metrics(),
+            'edges': self.get_all_edges_with_attributes(),
+            'summary': self.get_graph_summary()
         }
     
     def add_transactions(self, new_df: pd.DataFrame) -> Dict[str, int]:

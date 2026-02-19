@@ -40,18 +40,29 @@ function GraphVisualization({ data, fraudResults, riskIntelligence }) {
   const [minAmount, setMinAmount] = useState(0);
   const [dimensions, setDimensions] = useState({ width: 900, height: 700 });
 
+  // ── Derive ring membership from fraud_rings ──────────────────────────────
+  const ringMembershipMap = useMemo(() => {
+    const map = new Map();
+    fraudResults?.fraud_rings?.forEach(ring => {
+      ring.member_accounts?.forEach(accId => {
+        map.set(accId, ring.ring_id);
+      });
+    });
+    return map;
+  }, [fraudResults]);
+
   // ── Derived data maps ─────────────────────────────────────────────────────
   const suspiciousMap = useMemo(() => {
     const map = new Map();
     fraudResults?.suspicious_accounts?.forEach(acc => {
       map.set(acc.account_id, {
-        score: acc.suspicion_score,
-        ringId: acc.ring_id,
-        patterns: acc.detected_patterns || []
+        score: acc.score,
+        ringId: ringMembershipMap.get(acc.account_id) || null,
+        patterns: acc.patterns || []
       });
     });
     return map;
-  }, [fraudResults]);
+  }, [fraudResults, ringMembershipMap]);
 
   const riskMap = useMemo(() => {
     const map = new Map();
@@ -159,9 +170,12 @@ function GraphVisualization({ data, fraudResults, riskIntelligence }) {
       const risk = riskMap.get(node.id);
       const score = susp?.score || risk?.risk_score || 0;
       
-      // Size: reduced variation for cleaner look
+      // Size: suspicious/ring nodes are larger for distinction
       const degree = (node.in_degree || 0) + (node.out_degree || 0);
-      const size = 8 + Math.sqrt(degree) * 2;
+      let size = 8 + Math.sqrt(degree) * 2;
+      const isInRing = !!susp?.ringId;
+      if (isInRing) size = Math.max(size, 14);  // Ring members are bigger
+      else if (susp) size = Math.max(size, 12); // Suspicious nodes slightly bigger
 
       // Color based on risk level
       let color = COLORS.nodeLow;
@@ -174,6 +188,7 @@ function GraphVisualization({ data, fraudResults, riskIntelligence }) {
         color,
         score,
         isSuspicious: !!susp,
+        isInRing,
         ringId: susp?.ringId,
         patterns: susp?.patterns || [],
         riskLevel: risk?.risk_level || (score >= 70 ? 'HIGH' : score >= 40 ? 'MEDIUM' : 'LOW')
@@ -319,15 +334,45 @@ function GraphVisualization({ data, fraudResults, riskIntelligence }) {
     ctx.save();
     ctx.globalAlpha = alpha;
 
+    // Glow effect for ring members and suspicious nodes
+    if (node.isInRing && !isDimmed) {
+      ctx.beginPath();
+      ctx.arc(node.x, node.y, r + 6, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(239, 68, 68, 0.15)';
+      ctx.fill();
+      // Outer dashed ring for ring members
+      ctx.beginPath();
+      ctx.arc(node.x, node.y, r + 4, 0, Math.PI * 2);
+      ctx.strokeStyle = '#EF4444';
+      ctx.lineWidth = 2 / globalScale;
+      ctx.setLineDash([4 / globalScale, 3 / globalScale]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    } else if (node.isSuspicious && !isDimmed) {
+      // Subtle glow for suspicious but non-ring nodes
+      ctx.beginPath();
+      ctx.arc(node.x, node.y, r + 4, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(245, 158, 11, 0.12)';
+      ctx.fill();
+    }
+
     // Node fill
     ctx.beginPath();
     ctx.arc(node.x, node.y, r, 0, Math.PI * 2);
     ctx.fillStyle = node.color;
     ctx.fill();
 
-    // Node stroke
-    ctx.strokeStyle = isSelected || isHovered ? COLORS.nodeStrokeHover : COLORS.nodeStroke;
-    ctx.lineWidth = (isSelected ? 3 : isHovered ? 2.5 : 1.5) / globalScale;
+    // Node stroke — ring members get a thick colored border
+    if (node.isInRing) {
+      ctx.strokeStyle = '#EF4444';
+      ctx.lineWidth = (isSelected ? 4 : 3) / globalScale;
+    } else if (node.isSuspicious) {
+      ctx.strokeStyle = '#F59E0B';
+      ctx.lineWidth = (isSelected ? 3.5 : 2.5) / globalScale;
+    } else {
+      ctx.strokeStyle = isSelected || isHovered ? COLORS.nodeStrokeHover : COLORS.nodeStroke;
+      ctx.lineWidth = (isSelected ? 3 : isHovered ? 2.5 : 1.5) / globalScale;
+    }
     ctx.stroke();
 
     // Label (only on hover/select or zoomed in)
@@ -563,6 +608,11 @@ function GraphVisualization({ data, fraudResults, riskIntelligence }) {
             <div className="gv-legend-item">
               <span className="gv-legend-line" style={{background: COLORS.edgeSuspicious}}></span>
               <span>Suspicious</span>
+            </div>
+            <div className="gv-legend-sep"></div>
+            <div className="gv-legend-item">
+              <span className="gv-legend-dot" style={{background: COLORS.nodeHigh, border: '2px dashed #EF4444', boxShadow: '0 0 6px rgba(239,68,68,0.5)'}}></span>
+              <span>Ring Member</span>
             </div>
           </div>
         </div>

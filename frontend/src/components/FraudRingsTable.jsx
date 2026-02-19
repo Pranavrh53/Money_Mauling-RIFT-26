@@ -76,6 +76,7 @@ function FraudRingsTable({ rings }) {
                 <th className="col-pattern">Pattern Type</th>
                 <th className="col-members">Members</th>
                 <th className="col-risk">Risk Score</th>
+                <th className="col-member-accounts">Member Account IDs</th>
                 <th className="col-expand"></th>
               </tr>
             </thead>
@@ -115,6 +116,11 @@ function FraudRingsTable({ rings }) {
                           <div className="risk-level-text">{risk.level}</div>
                         </div>
                       </td>
+                      <td className="col-member-accounts">
+                        <div className="member-accounts-cell">
+                          {ring.member_accounts.join(', ')}
+                        </div>
+                      </td>
                       <td className="col-expand">
                         <button className="expand-btn">
                           <svg 
@@ -137,7 +143,7 @@ function FraudRingsTable({ rings }) {
                     </tr>
                     {isExpanded && (
                       <tr className="expanded-content-row">
-                        <td colSpan="5">
+                        <td colSpan="6">
                           <div className="expanded-content">
                             <div className="members-grid">
                               <div className="grid-header">Member Accounts</div>
