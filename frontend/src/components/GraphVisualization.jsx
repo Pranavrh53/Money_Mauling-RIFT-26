@@ -593,9 +593,10 @@ function GraphVisualization({ data, fraudResults, riskIntelligence }) {
           <div className="gv-pattern-buttons">
             <span className="gv-pattern-label">Highlight Pattern:</span>
             <button
-              className={`gv-pattern-btn gv-pattern-cycle ${activePattern === 'cycle' ? 'active' : ''}`}
-              onClick={() => setActivePattern(prev => prev === 'cycle' ? null : 'cycle')}
-              title="Highlight Circular Fund Routing (Cycles)"
+              className={`gv-pattern-btn gv-pattern-cycle ${activePattern === 'cycle' ? 'active' : ''} ${patternNodeSets.cycle.size === 0 ? 'empty' : ''}`}
+              onClick={() => patternNodeSets.cycle.size > 0 && setActivePattern(prev => prev === 'cycle' ? null : 'cycle')}
+              disabled={patternNodeSets.cycle.size === 0}
+              title={patternNodeSets.cycle.size > 0 ? 'Highlight Circular Fund Routing (Cycles)' : 'No cycle patterns detected'}
             >
               🔄 Cycles
               {patternNodeSets.cycle.size > 0 && (
@@ -603,9 +604,10 @@ function GraphVisualization({ data, fraudResults, riskIntelligence }) {
               )}
             </button>
             <button
-              className={`gv-pattern-btn gv-pattern-smurfing ${activePattern === 'smurfing' ? 'active' : ''}`}
-              onClick={() => setActivePattern(prev => prev === 'smurfing' ? null : 'smurfing')}
-              title="Highlight Smurfing Patterns (Fan-in / Fan-out)"
+              className={`gv-pattern-btn gv-pattern-smurfing ${activePattern === 'smurfing' ? 'active' : ''} ${patternNodeSets.smurfing.size === 0 ? 'empty' : ''}`}
+              onClick={() => patternNodeSets.smurfing.size > 0 && setActivePattern(prev => prev === 'smurfing' ? null : 'smurfing')}
+              disabled={patternNodeSets.smurfing.size === 0}
+              title={patternNodeSets.smurfing.size > 0 ? 'Highlight Smurfing Patterns (Fan-in / Fan-out)' : 'No smurfing patterns detected'}
             >
               📥📤 Smurfing
               {patternNodeSets.smurfing.size > 0 && (
@@ -613,9 +615,10 @@ function GraphVisualization({ data, fraudResults, riskIntelligence }) {
               )}
             </button>
             <button
-              className={`gv-pattern-btn gv-pattern-shell ${activePattern === 'shell_chain' ? 'active' : ''}`}
-              onClick={() => setActivePattern(prev => prev === 'shell_chain' ? null : 'shell_chain')}
-              title="Highlight Layered Shell Networks"
+              className={`gv-pattern-btn gv-pattern-shell ${activePattern === 'shell_chain' ? 'active' : ''} ${patternNodeSets.shell_chain.size === 0 ? 'empty' : ''}`}
+              onClick={() => patternNodeSets.shell_chain.size > 0 && setActivePattern(prev => prev === 'shell_chain' ? null : 'shell_chain')}
+              disabled={patternNodeSets.shell_chain.size === 0}
+              title={patternNodeSets.shell_chain.size > 0 ? 'Highlight Layered Shell Networks' : 'No shell network patterns detected'}
             >
               🏢 Shell Networks
               {patternNodeSets.shell_chain.size > 0 && (

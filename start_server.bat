@@ -1,5 +1,5 @@
 @echo off
-echo Starting Financial Crime Detection API...
+echo Starting Graphora API...
 echo.
 echo Server will be available at: http://localhost:8000
 echo API Documentation: http://localhost:8000/docs

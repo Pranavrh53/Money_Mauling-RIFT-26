@@ -1,5 +1,5 @@
 """
-FastAPI application for financial crime detection - CSV upload and validation
+Graphora API — AI-powered financial crime detection with graph analysis
 """
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.responses import JSONResponse, Response
@@ -31,8 +31,8 @@ logger = logging.getLogger(__name__)
 
 # Initialize FastAPI app
 app = FastAPI(
-    title="Financial Crime Detection API",
-    description="CSV upload, validation, and graph-based transaction analysis",
+    title="Graphora API",
+    description="AI-powered financial crime detection — CSV upload, validation, and graph-based transaction analysis",
     version="2.0.0"
 )
 
@@ -67,7 +67,7 @@ async def root():
     """Health check endpoint"""
     return {
         "status": "healthy",
-        "service": "Financial Crime Detection API",
+        "service": "Graphora API",
         "version": "1.0.0"
     }
 

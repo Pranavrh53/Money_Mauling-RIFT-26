@@ -1,12 +1,19 @@
 .upload-container {
-  background: linear-gradient(135deg, rgba(22, 27, 34, 0.8) 0%, rgba(33, 38, 45, 0.8) 100%);
-  border: 1px solid var(--border-color);
+  background: linear-gradient(135deg, rgba(22, 27, 34, 0.6) 0%, rgba(33, 38, 45, 0.6) 100%);
+  border: 1px solid rgba(0, 212, 255, 0.1);
   border-radius: 16px;
-  padding: 2.5rem;
-  margin-bottom: 2rem;
-  box-shadow: 0 8px 32px var(--shadow);
+  padding: 2rem;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
   backdrop-filter: blur(10px);
   animation: fadeInUp 0.6s ease;
+}
+
+.upload-container h2 {
+  display: none; /* title now in upload-page-header */
+}
+
+.upload-description {
+  display: none; /* description now in upload-page-subtitle */
 }
 
 @keyframes fadeInUp {
@@ -21,13 +28,13 @@
 }
 
 .upload-dropzone {
-  border: 3px dashed var(--border-color);
-  border-radius: 12px;
-  padding: 3.5rem 2rem;
+  border: 2px dashed rgba(0, 212, 255, 0.2);
+  border-radius: 14px;
+  padding: 3rem 2rem;
   text-align: center;
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  background: linear-gradient(135deg, rgba(33, 38, 45, 0.5) 0%, rgba(22, 27, 34, 0.5) 100%);
-  margin-bottom: 2rem;
+  background: linear-gradient(135deg, rgba(0, 212, 255, 0.02) 0%, rgba(0, 255, 209, 0.01) 100%);
+  margin-bottom: 1.5rem;
   position: relative;
   overflow: hidden;
   cursor: pointer;
@@ -64,10 +71,10 @@
 }
 
 .upload-dropzone:hover {
-  border-color: var(--accent-blue);
-  background: linear-gradient(135deg, rgba(33, 38, 45, 0.8) 0%, rgba(22, 27, 34, 0.8) 100%);
+  border-color: rgba(0, 212, 255, 0.5);
+  background: linear-gradient(135deg, rgba(0, 212, 255, 0.05) 0%, rgba(0, 255, 209, 0.03) 100%);
   transform: translateY(-2px);
-  box-shadow: 0 12px 40px rgba(88, 166, 255, 0.15);
+  box-shadow: 0 12px 40px rgba(0, 212, 255, 0.1);
 }
 
 .upload-dropzone:hover::before {
@@ -75,10 +82,10 @@
 }
 
 .upload-dropzone.drag-active {
-  border-color: var(--accent-green);
-  background: linear-gradient(135deg, rgba(63, 185, 80, 0.1) 0%, rgba(88, 166, 255, 0.1) 100%);
+  border-color: #00FFD1;
+  background: linear-gradient(135deg, rgba(0, 255, 209, 0.08) 0%, rgba(0, 212, 255, 0.06) 100%);
   transform: scale(1.02);
-  box-shadow: 0 16px 48px rgba(63, 185, 80, 0.3);
+  box-shadow: 0 16px 48px rgba(0, 255, 209, 0.15);
 }
 
 .upload-icon {
@@ -111,11 +118,11 @@
 }
 
 .upload-button {
-  background: linear-gradient(135deg, #58a6ff 0%, #3fb950 100%);
-  color: white;
+  background: linear-gradient(135deg, #00D4FF 0%, #00FFD1 100%);
+  color: #0d1117;
   padding: 1rem 2.5rem;
   border-radius: 12px;
-  font-size: 1.05rem;
+  font-size: 1rem;
   font-weight: 700;
   display: flex;
   align-items: center;
@@ -124,7 +131,7 @@
   width: 100%;
   max-width: 350px;
   margin: 0 auto;
-  box-shadow: 0 8px 24px rgba(88, 166, 255, 0.4);
+  box-shadow: 0 4px 20px rgba(0, 212, 255, 0.3);
   position: relative;
   overflow: hidden;
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
@@ -142,8 +149,7 @@
 }
 
 .upload-btn:hover:not(:disabled) {
-  background: linear-gradient(135deg, #4a8fd9 0%, #38a145 100%);
-  box-shadow: 0 12px 32px rgba(88, 166, 255, 0.5);
+  box-shadow: 0 8px 32px rgba(0, 212, 255, 0.5);
   transform: translateY(-2px);
 }
 
@@ -153,14 +159,12 @@
 
 .upload-btn:active:not(:disabled) {
   transform: translateY(0);
-  box-shadow: 0 4px 16px rgba(88, 166, 255, 0.3);
 }
 
 .upload-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
   transform: none;
-  box-shadow: 0 4px 12px rgba(88, 166, 255, 0.2);
 }
 
 .upload-success {
@@ -171,16 +175,16 @@
 
 .upload-hint {
   color: var(--text-secondary);
-  font-size: 0.9rem;
+  font-size: 0.85rem;
 }
 
 .upload-btn {
-  background: linear-gradient(135deg, var(--accent-blue), #4a8fd9);
-  color: white;
+  background: linear-gradient(135deg, #00D4FF 0%, #00FFD1 100%);
+  color: #0d1117;
   padding: 0.875rem 2rem;
-  border-radius: 8px;
+  border-radius: 10px;
   font-size: 1rem;
-  font-weight: 600;
+  font-weight: 700;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -188,16 +192,19 @@
   width: 100%;
   max-width: 300px;
   margin: 0 auto;
-  box-shadow: 0 4px 6px var(--shadow);
+  box-shadow: 0 4px 16px rgba(0, 212, 255, 0.3);
+  border: none;
+  cursor: pointer;
+  transition: all 0.3s ease;
 }
 
 .upload-btn:hover:not(:disabled) {
-  background: linear-gradient(135deg, #4a8fd9, var(--accent-blue));
-  box-shadow: 0 6px 12px var(--shadow);
+  box-shadow: 0 6px 24px rgba(0, 212, 255, 0.5);
+  transform: translateY(-2px);
 }
 
 .upload-btn:disabled {
-  opacity: 0.6;
+  opacity: 0.5;
   cursor: not-allowed;
   transform: none;
 }

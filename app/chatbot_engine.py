@@ -1,5 +1,5 @@
 """
-AI Chatbot Engine for Financial Crime Detection
+Graphora AI Chatbot Engine
 Answers user queries using uploaded dataset and fraud detection results.
 """
 import re

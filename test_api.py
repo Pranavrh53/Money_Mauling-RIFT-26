@@ -49,7 +49,7 @@ def test_upload_sample():
 
 
 if __name__ == "__main__":
-    print("\n🧪 Testing Financial Crime Detection API\n")
+    print("\n🧪 Testing Graphora API\n")
     print("=" * 50)
     
     # Test health check

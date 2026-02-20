@@ -141,6 +141,14 @@
   color: var(--gv-text);
 }
 
+/* Disabled / empty pattern buttons */
+.gv-pattern-btn.empty,
+.gv-pattern-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
 /* Cycle button */
 .gv-pattern-cycle {
   border-color: rgba(168, 85, 247, 0.25);

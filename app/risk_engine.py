@@ -1,5 +1,5 @@
 """
-Risk Intelligence Engine
+Graphora Risk Intelligence Engine
 Advanced risk scoring for financial crime detection with customized explanations
 """
 import networkx as nx

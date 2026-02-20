@@ -1,6 +1,6 @@
 @echo off
 echo ============================================
-echo   Financial Crime Detection - Step 2
+echo   Graphora — AI-Powered Crime Detection
 echo   Starting Backend + Frontend
 echo ============================================
 echo.

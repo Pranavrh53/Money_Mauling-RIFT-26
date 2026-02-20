@@ -247,10 +247,6 @@ class FraudDetectionEngine:
                     window_transactions.append(transactions[j])
                 
                 if len(senders_in_window) >= threshold:
-                    # Skip whitelisted merchants (false positive control)
-                    if receiver in self.whitelisted_accounts:
-                        logger.info(f"Skipping fan-in for whitelisted account {receiver}")
-                        break
                     fan_in_patterns.append({
                         'receiver': receiver,
                         'senders': list(senders_in_window),
@@ -291,10 +287,6 @@ class FraudDetectionEngine:
                     window_transactions.append(transactions[j])
                 
                 if len(receivers_in_window) >= threshold:
-                    # Skip whitelisted payroll accounts (false positive control)
-                    if sender in self.whitelisted_accounts:
-                        logger.info(f"Skipping fan-out for whitelisted account {sender}")
-                        break
                     fan_out_patterns.append({
                         'sender': sender,
                         'receivers': list(receivers_in_window),
@@ -497,13 +489,31 @@ class FraudDetectionEngine:
                     scores[account]['factors'].append(f'velocity_x{multiplier:.1f}')
         
         # 6. Whitelisted account protection (MUST NOT flag merchants/payroll)
+        # BUT keep pattern membership if found in smurfing rings so graph
+        # highlighting still works.
+        smurfing_members = set()
+        for p in self.detected_fanin:
+            smurfing_members.add(p['receiver'])
+            smurfing_members.update(p['senders'])
+        for p in self.detected_fanout:
+            smurfing_members.add(p['sender'])
+            smurfing_members.update(p['receivers'])
+
         for account in self.whitelisted_accounts:
             if account in scores:
-                scores[account]['score'] = 0
-                scores[account]['factors'] = ['whitelisted_legitimate_account']
-                scores[account]['patterns'] = []
-                scores[account]['risk_level'] = 'LOW'
-                logger.info(f"Zeroed score for whitelisted account {account}")
+                # If the account is part of a detected smurfing ring, keep
+                # its patterns so the fraud ring is still constructed, but
+                # apply a moderate score instead of zeroing it.
+                if account in smurfing_members:
+                    scores[account]['score'] = max(scores[account]['score'] * 0.5, 30)
+                    scores[account]['factors'].append('whitelisted_but_smurfing_member')
+                    logger.info(f"Reduced (not zeroed) score for whitelisted smurfing member {account}")
+                else:
+                    scores[account]['score'] = 0
+                    scores[account]['factors'] = ['whitelisted_legitimate_account']
+                    scores[account]['patterns'] = []
+                    scores[account]['risk_level'] = 'LOW'
+                    logger.info(f"Zeroed score for whitelisted account {account}")
 
         # 7. Penalty for legitimate patterns
         for account in self.graph.nodes():
