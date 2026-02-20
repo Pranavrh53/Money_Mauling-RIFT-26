@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import API_BASE from './config';
 import LandingPage from './components/LandingPage';
 import FileUpload from './components/FileUpload';
 import GraphVisualization from './components/GraphVisualization';
@@ -167,7 +168,7 @@ function App() {
     console.log('Fetching graph data...');
     setLoading(true);
     try {
-      const response = await fetch('http://localhost:8000/graph-data');
+      const response = await fetch(`${API_BASE}/graph-data`);
       console.log('Graph data response status:', response.status);
       
       if (!response.ok) {
@@ -200,7 +201,7 @@ function App() {
     setError(null);
     
     try {
-      const response = await fetch('http://localhost:8000/detect-fraud', {
+      const response = await fetch(`${API_BASE}/detect-fraud`, {
         method: 'POST',
       });
       
@@ -236,7 +237,7 @@ function App() {
     setDetectingFraud(true);
     setError(null);
     try {
-      const response = await fetch('http://localhost:8000/detect-fraud', {
+      const response = await fetch(`${API_BASE}/detect-fraud`, {
         method: 'POST',
       });
       if (!response.ok) {
@@ -261,7 +262,7 @@ function App() {
   const fetchRiskIntelligence = async () => {
     console.log('Fetching risk intelligence...');
     try {
-      const response = await fetch('http://localhost:8000/risk-intelligence');
+      const response = await fetch(`${API_BASE}/risk-intelligence`);
       
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
@@ -281,7 +282,7 @@ function App() {
 const fetchResultsSummary = async () => {
     console.log('Fetching results summary...');
     try {
-      const response = await fetch('http://localhost:8000/download-results');
+      const response = await fetch(`${API_BASE}/download-results`);
       if (response.ok) {
         const data = await response.json();
         console.log('Results summary received:', data.summary);
@@ -294,7 +295,7 @@ const fetchResultsSummary = async () => {
 
   const fetchJsonResults = async () => {
     try {
-      const response = await fetch('http://localhost:8000/download-results');
+      const response = await fetch(`${API_BASE}/download-results`);
       
       if (!response.ok) {
         throw new Error('Failed to fetch results');
@@ -349,7 +350,7 @@ const fetchResultsSummary = async () => {
   // Monitoring system functions
   const fetchAlerts = async () => {
     try {
-      const response = await fetch('http://localhost:8000/alerts?limit=50');
+      const response = await fetch(`${API_BASE}/alerts?limit=50`);
       if (response.ok) {
         const data = await response.json();
         setAlerts(data.alerts || []);
@@ -362,7 +363,7 @@ const fetchResultsSummary = async () => {
   const toggleMonitoring = async () => {
     try {
       const newState = !monitoringActive;
-      const response = await fetch(`http://localhost:8000/monitoring/toggle?enabled=${newState}`, {
+      const response = await fetch(`${API_BASE}/monitoring/toggle?enabled=${newState}`, {
         method: 'POST'
       });
       
@@ -390,7 +391,7 @@ const fetchResultsSummary = async () => {
 
   const handleStrategyChange = async (strategy) => {
     try {
-      const response = await fetch(`http://localhost:8000/monitoring/strategy?strategy=${strategy}`, {
+      const response = await fetch(`${API_BASE}/monitoring/strategy?strategy=${strategy}`, {
         method: 'POST'
       });
       
@@ -416,7 +417,7 @@ const fetchResultsSummary = async () => {
 
   const acknowledgeAlert = async (alertId) => {
     try {
-      const response = await fetch(`http://localhost:8000/alerts/${alertId}/acknowledge`, {
+      const response = await fetch(`${API_BASE}/alerts/${alertId}/acknowledge`, {
         method: 'POST'
       });
       
@@ -433,7 +434,7 @@ const fetchResultsSummary = async () => {
 
   const clearAllAlerts = async () => {
     try {
-      const response = await fetch('http://localhost:8000/alerts', {
+      const response = await fetch(`${API_BASE}/alerts`, {
         method: 'DELETE'
       });
       

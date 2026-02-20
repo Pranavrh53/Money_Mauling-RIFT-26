@@ -3,11 +3,13 @@ Graphora API — AI-powered financial crime detection with graph analysis
 """
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.responses import JSONResponse, Response
+from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
 from io import StringIO
 import logging
 import json
+import os
 
 from app.validators import validate_csv_data, calculate_summary, ValidationError
 from app.models import (UploadResponse, ErrorResponse, GraphDataResponse, FraudDetectionResponse, 
@@ -749,3 +751,21 @@ async def http_exception_handler(request, exc):
         status_code=exc.status_code,
         content={"detail": exc.detail}
     )
+
+
+# ── Serve built React frontend ──────────────────────────────────────────
+# Mount AFTER all API routes so API endpoints take priority
+frontend_dist = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend", "dist")
+if os.path.isdir(frontend_dist):
+    from fastapi.responses import FileResponse
+
+    # Serve static assets (JS, CSS, images)
+    app.mount("/assets", StaticFiles(directory=os.path.join(frontend_dist, "assets")), name="static-assets")
+
+    @app.get("/{full_path:path}")
+    async def serve_frontend(full_path: str):
+        """Serve the React SPA for any non-API route"""
+        file_path = os.path.join(frontend_dist, full_path)
+        if full_path and os.path.isfile(file_path):
+            return FileResponse(file_path)
+        return FileResponse(os.path.join(frontend_dist, "index.html"))

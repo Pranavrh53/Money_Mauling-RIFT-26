@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import API_BASE from '../config';
 import './ChatBot.css';
 
 function ChatBot({ isOpen, onToggle, theme }) {
@@ -36,7 +37,7 @@ function ChatBot({ isOpen, onToggle, theme }) {
 
     try {
       const response = await fetch(
-        `http://localhost:8000/chat?question=${encodeURIComponent(q)}`,
+        `${API_BASE}/chat?question=${encodeURIComponent(q)}`,
         { method: 'POST' }
       );
 
