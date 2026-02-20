@@ -1,0 +1,10 @@
+frontend/
+node_modules/
+__pycache__/
+*.pyc
+.git/
+tests/
+*.csv
+*.json
+!vercel.json
+!package.json
