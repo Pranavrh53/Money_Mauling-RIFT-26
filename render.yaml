@@ -1,9 +1,21 @@
 services:
+  # Backend API
   - type: web
-    name: graphora
+    name: graphora-api
     runtime: docker
     plan: free
     dockerfilePath: ./Dockerfile
     envVars:
       - key: PORT
         value: "10000"
+
+  # Frontend
+  - type: web
+    name: graphora-frontend
+    runtime: static
+    plan: free
+    buildCommand: cd frontend && npm install && npm run build
+    staticPublishPath: frontend/dist
+    envVars:
+      - key: VITE_API_URL
+        value: https://graphora-api.onrender.com
