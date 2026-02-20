@@ -64,9 +64,24 @@ detection_strategy: str = "all_patterns"  # all_patterns, cycles_only, fan_patte
 chatbot: FraudChatBot = FraudChatBot()
 
 
+@app.get("/health")
+async def health():
+    """Health check endpoint"""
+    return {
+        "status": "healthy",
+        "service": "Graphora API",
+        "version": "1.0.0"
+    }
+
+
 @app.get("/")
 async def root():
-    """Health check endpoint"""
+    """Serve React frontend or health check"""
+    _dist = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend", "dist")
+    index = os.path.join(_dist, "index.html")
+    if os.path.isfile(index):
+        from fastapi.responses import FileResponse
+        return FileResponse(index)
     return {
         "status": "healthy",
         "service": "Graphora API",
