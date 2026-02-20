@@ -1,4 +1,6 @@
-// API base URL — empty in production (same-origin), localhost in dev
-const API_BASE = import.meta.env.VITE_API_URL || '';
+// API base URL — Railway backend in production, localhost in dev
+const API_BASE = import.meta.env.DEV 
+  ? '' 
+  : 'https://moneymauling-rift-26-production.up.railway.app';
 
 export default API_BASE;
